@@ -1,0 +1,112 @@
+Day 23 — Bicep compile and lint
+================================
+
+Machine: the repository owner's Windows machine. NOT where the templates were
+written — that environment had no az, no bicep and no network to install
+either, so this file is the first time any of this code met a compiler.
+
+Bicep CLI version 0.46.1 (545b338e2c)
+
+Note on getting here: the az-bundled bicep binary was initially corrupt and
+every command died with `OSError: [WinError 193] %1 is not a valid Win32
+application` inside `_get_bicep_installed_version`, before reading a single
+template. `az bicep uninstall` / `az bicep install` fixed it. Recorded because
+the traceback looks like a template problem and is not one.
+
+
+COMMANDS
+--------
+
+    cd C:\thinkschool\Day7\piece2
+    $env:JWT_SECRET = '<32+ characters>'
+    az bicep build        --file infra/main.bicep --stdout > $null
+    az bicep lint         --file infra/main.bicep
+    az bicep build-params --file infra/main.dev.bicepparam  --stdout > $null
+    az bicep build-params --file infra/main.prod.bicepparam --stdout > $null
+
+
+RESULT
+------
+
+All four commands succeeded. No errors, no warnings.
+
+The only output was one informational line per file per invocation:
+
+    <file>(1,1) : Info Bicep Linter Configuration: Custom bicepconfig.json
+    file found (C:\thinkschool\Day7\piece2\infra\bicepconfig.json).
+
+That is `"verbose": true` in bicepconfig.json, not a finding. It printed 35
+times for a clean run and was switched to false afterwards, so that a real
+lint finding is not buried in it here or in CI.
+
+Files compiled by these four commands:
+
+    infra/main.bicep
+    infra/main.dev.bicepparam
+    infra/main.prod.bicepparam
+    infra/modules/api.bicep
+    infra/modules/environment.bicep
+    infra/modules/identity.bicep
+    infra/modules/monitoring.bicep
+    infra/modules/registry.bicep
+    infra/modules/servicebus.bicep
+    infra/modules/sql.bicep
+
+`build-params` is the step that earns its keep: a .bicepparam file is typed
+against the template it `using`s, so a renamed or removed parameter fails
+here. The main.parameters.json that azd reads would have accepted the same
+typo in silence and surfaced it as a deployment error.
+
+
+WHAT THIS DOES NOT PROVE
+------------------------
+
+That the templates deploy. A clean compile means the graph is
+well-formed and the parameter files match it — not that any resource
+provider will accept what it is sent. The SQL module in particular has
+never been near an ARM validation pass: `administrators` with
+azureADOnlyAuthentication, and the union() of the serverless properties,
+are the two places where a compile says least about correctness.
+
+what-if is the next step, and it is a separate file.
+
+
+THREE ERRORS THE COMPILER CAUGHT FIRST
+--------------------------------------
+
+Kept because the fixes are only legible alongside what they fixed. All
+three were reported by the VS Code Bicep extension before the CLI worked.
+
+1. BCP104 — "the referenced module has errors", pointing at main.bicep.
+
+   Cause: `#disable-next-line no-unused-params` was placed above the
+   @description decorator rather than above the `param` line the
+   diagnostic lands on, so the suppression missed entirely — and
+   no-unused-params is set to ERROR in this repository's own
+   bicepconfig.json. main.bicep failed to compile on a rule turned up by
+   the same change.
+
+2. BCP427 — "Environment variable JWT_SECRET does not exist and there's
+   no default value set."
+
+   Cause: `readEnvironmentVariable('JWT_SECRET')`, one-argument form,
+   chosen so that a missing key would fail loudly. It fails at OPEN, not
+   at deploy: the file is red in every editor where the variable is not
+   exported, which is every editor.
+
+3. BCP333 — "The provided value (whose length will always be less than or
+   equal to 0) is too short ... minimum allowable length is 32."
+
+   Cause: the fix for (2) — `readEnvironmentVariable('JWT_SECRET', '')` —
+   combined with @minLength(32) on main.bicep's jwtSecret. Bicep validates
+   length constraints on a .bicepparam assignment at COMPILE time.
+
+   Final shape: the empty fallback stays, and @minLength(32) lives only on
+   modules/api.bicep's parameter, where the value is consumed. Bicep cannot
+   statically prove the length of a value arriving through a pass-through
+   parameter, so ARM enforces it at deployment instead — before a single
+   resource is touched. Fail at deploy, not at open.
+
+The generalisable point is (3): a constraint on a pass-through parameter is
+checked at a different time, and against a different input, than the same
+constraint on the parameter that consumes the value.

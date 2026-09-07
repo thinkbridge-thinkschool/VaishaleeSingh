@@ -4,5 +4,7 @@
   "containerAppsEnvironment": "cae",
   "containerRegistry": "cr",
   "logAnalyticsWorkspace": "log",
-  "managedIdentity": "id"
+  "managedIdentity": "id",
+  "sqlServer": "sql",
+  "serviceBusNamespace": "sb"
 }

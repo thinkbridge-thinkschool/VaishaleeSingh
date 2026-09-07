@@ -1,0 +1,100 @@
+Day 23 — dev deployment, result
+================================
+
+Deployment name  : main
+Resource group   : thinkschool-day23-rg (created by this deployment)
+Location         : centralindia
+Duration         : PT3M17.9582669S
+provisioningState: Succeeded
+error            : null
+templateHash     : 12697819986399307821
+timestamp        : 2026-09-07T12:00:11Z
+
+The full JSON is in deploy-dev.txt. This file is the part worth reading.
+
+
+WHAT THE PLAN SAID, AND WHAT HAPPENED
+-------------------------------------
+
+what-if predicted 15 to create, 0 to modify, 0 to delete, 3 unsupported,
+plus 1 "may or may not be deployed".
+
+The deployment produced 19 output resources: the 15, plus the 4 role
+assignments what-if could not analyse.
+
+  AcrPull on the registry        ffbcd772-966d-5a0a-8d01-6f1de298f45a
+  Data Sender on the topic       4f4caea9-90ce-5d1d-8230-3cdd36b1ada0
+  Data Receiver on audit         125e4dec-7693-5d3b-a15c-71c6b66f9a47
+  Data Receiver on search-index  4972dd88-1ce9-5f4c-993b-bd4fcd2023c0
+
+So the three "Unsupported" diagnostics and the one "MAY OR MAY NOT be
+deployed" were what-if's limitation, not a defect: an extension resource
+whose ID depends on a reference() resolved during deployment cannot be
+predicted ahead of it. All four deployed. Worth stating, because the other
+reading of those diagnostics — that the grants silently did not happen —
+is the one that produces an app which cannot pull its own image.
+
+Module order, as ARM resolved it from the graph rather than from any
+hand-written dependsOn:
+
+  monitoring, identity          no dependencies
+  registry                      identity
+  containerAppsEnvironment      monitoring
+  sql, serviceBus               identity
+  api                           all of the above, plus fetchLatestImage
+
+
+WHAT THIS RUN SETTLED THAT READING COULD NOT
+--------------------------------------------
+
+1. A guest (#EXT#) account is accepted as an Azure SQL Entra
+   administrator. azureADOnlyAuthentication is true and the server has no
+   SQL login at all.
+
+2. GP_S_Gen5 serverless is available in centralindia, and autoPauseDelay
+   60 was accepted on the database.
+
+3. The role assignments deployed with the credentials in use — no
+   separate User Access Administrator grant was needed.
+
+4. The cross-resource-group Container Apps Environment reference
+   resolved: the app runs in thinkschool-rg/thinkschool-env while every
+   resource it owns lives in thinkschool-day23-rg.
+
+5. jwtSecret appears in the deployment record as {"type": "SecureString"}
+   with no value field. @secure() is doing what it claims — the key is not
+   readable from deployment history.
+
+
+ARM CAMEL-CASES OUTPUT NAMES
+----------------------------
+
+AZURE_SQL_SERVER_FQDN comes back as azurE_SQL_SERVER_FQDN, and
+SERVICE_QUOTES_API_IDENTITY_NAME as servicE_QUOTES_API_IDENTITY_NAME.
+JMESPath is case-sensitive, so a query using the name as declared in the
+template returns null rather than failing. The runbook was corrected
+against this run.
+
+
+KEY OUTPUTS
+-----------
+
+  SQL server     sql-quotes-neufxknr54rza.database.windows.net
+  Database       quotes
+  Service Bus    sb-quotes-neufxknr54rza.servicebus.windows.net
+  Registry       crneufxknr54rza.azurecr.io
+  Identity       id-quotes-api-neufxknr54rza
+  Container app  quotes-api-day23
+  URI            https://quotes-api-day23.whitestone-71ebd55e.centralindia.azurecontainerapps.io
+
+
+STATE AFTER THIS STEP — DELIBERATE, NOT INCOMPLETE
+--------------------------------------------------
+
+The container app is running mcr.microsoft.com/azuredocs/aci-helloworld,
+not QuotesApi. No image has been pushed to this environment's registry
+yet, and the ordering is the point: the app's managed identity has no
+contained database user, so QuotesApi deployed now would start, fail to
+log in to SQL, and fail /health/ready permanently.
+
+create-sql-user.ps1 runs next. The real image after that.
