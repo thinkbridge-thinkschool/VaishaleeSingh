@@ -224,6 +224,66 @@ jobs:
         run: docker rm -f quotes-api-ci || true
 
 
+  # Day 23: the infrastructure is Bicep now, and Bicep breaks the same way code
+  # does -- a renamed module output, a parameter that no longer exists, a typo in
+  # a .bicepparam file. None of that is visible until someone deploys, which is
+  # the worst possible moment to find out.
+  #
+  # Separate job for the same reason as `container`: an infra failure should be
+  # distinguishable from a test failure at a glance, and both answers are more
+  # useful on a red PR than a saved runner minute.
+  #
+  # NOTE: this job checks Day7/piece2/infra, which is the current tree. The
+  # `test` and `container` jobs above still point at Day5/piece2 -- a known gap
+  # (see the repo README, "Working in this repo"), deliberately not fixed here
+  # so that this PR stays about the infrastructure.
+  infra:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The az CLI ships bicep, and `az bicep install` pins a known-good build
+      # rather than whatever the runner image happens to carry.
+      - name: Install Bicep
+        run: az bicep install && az bicep version
+
+      # Compiles the whole module graph. Catches a bad cross-module reference,
+      # which is the failure this refactor made newly possible.
+      - name: Build main.bicep
+        run: az bicep build --file Day7/piece2/infra/main.bicep --stdout > /dev/null
+
+      # bicepconfig.json turns several rules up to error, including
+      # no-unused-params and outputs-should-not-contain-secrets.
+      - name: Lint
+        run: az bicep lint --file Day7/piece2/infra/main.bicep
+
+      # THE STEP THAT EARNS ITS KEEP. A .bicepparam file is typed against the
+      # template it `using`s, so a parameter that was renamed or removed fails
+      # here. The old main.parameters.json would have accepted the same typo in
+      # silence and surfaced it as a deployment error.
+      # JWT_SECRET is read by readEnvironmentVariable() at COMPILE time. The
+      # parameter files fall back to an empty string when it is unset, so these
+      # steps would pass without it -- it is set anyway so CI compiles the same
+      # shape a real deployment does rather than the fallback path. The value is
+      # a throwaway that signs nothing and reaches no environment.
+      - name: Type-check the dev parameter file
+        env:
+          JWT_SECRET: ci-only-throwaway-signing-key-not-used-anywhere-else
+        run: az bicep build-params --file Day7/piece2/infra/main.dev.bicepparam --outfile /dev/null
+
+      - name: Type-check the prod parameter file
+        env:
+          JWT_SECRET: ci-only-throwaway-signing-key-not-used-anywhere-else
+        run: az bicep build-params --file Day7/piece2/infra/main.prod.bicepparam --outfile /dev/null
+
+      # No `what-if` here: it needs a subscription and credentials this
+      # repository does not hold. The plan for both environments is captured by
+      # hand in Day23/verification/ instead, which is honest about being a
+      # point-in-time artifact rather than a continuous check.
+
+
 # Required for merging into main:
 # GitHub branch protection (Settings -> Branches -> main, in the repo's
 # web UI) is what actually blocks a PR from merging on a red run of this

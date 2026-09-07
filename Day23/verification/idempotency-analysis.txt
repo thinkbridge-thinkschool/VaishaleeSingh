@@ -1,0 +1,138 @@
+Day 23 — the idempotency check, read line by line
+==================================================
+
+Raw output: idempotency-second-what-if.txt
+Run immediately after a successful `az deployment sub create` that changed
+nothing. Deployment duration PT1M10.8825838S, provisioningState Succeeded.
+
+    Resource changes: 6 to modify, 9 no change, 3 unsupported, 1 to ignore.
+
+THE CLAIM THIS FILE MAKES, PRECISELY
+------------------------------------
+
+Not "what-if reports no changes". That result is unreachable for any template
+that uses reference(), and pretending otherwise would mean either not using
+reference() or not looking at the output.
+
+The claim is: every one of those 6 modifies is what-if measurement error, in one
+of three named categories, and none of them describes a resource this template
+fails to describe correctly. That is a weaker sentence than "no changes" and it
+is the one that is true.
+
+The two REAL drifts this check found on its first run were fixed before this
+one. They are recorded below, because a check that only ever confirms is not a
+check.
+
+
+WHAT THE FIRST IDEMPOTENCY RUN CAUGHT
+--------------------------------------
+
+1. `+ .../subscriptions/search-index/rules/$Default` — a CREATE against
+   resources nothing had touched.
+
+   Day 19 declared a '$Default' rule redefined as `1=0`, on the reasoning that
+   "adding a rule does NOT replace '$Default'" and a subscription carrying both
+   would match everything. That file was never deployed by anything, so the
+   reasoning was never tested. It is wrong: Service Bus deletes the default rule
+   when the first explicit rule is added. ARM created '$Default', creating
+   'content-changes-only' made the service delete it, and every future
+   deployment would have repeated that forever.
+
+   Removed. 'content-changes-only' now reads `= Nochange`. The 'audit'
+   subscription keeps its '$Default' TrueFilter precisely because it has no
+   explicit rule — the same behaviour from the other side, and what makes audit
+   receive everything.
+
+2. `~ properties.template.scale.rules` flipping between shapes:
+
+       - http:   metadata.concurrentRequests: "50"
+       + custom: metadata.concurrentRequests: "50", type: "http"
+
+   The template declared `custom:` with type 'http'. Container Apps accepts that
+   and normalises it into a native `http` rule, so the template described a
+   resource the service cannot store. Permanent drift on a correct resource —
+   which is how a team learns to ignore what-if output, and ignoring it is how
+   the real change hides.
+
+   Changed to `http:` directly. Gone from this run.
+
+
+THE 6 REMAINING MODIFIES, BY CATEGORY
+--------------------------------------
+
+CATEGORY A — reference() is not evaluated at plan time.
+
+what-if compares the deployed literal against the unresolved ARM expression and
+reports a difference. Four instances:
+
+  containerApps  registries[0].server
+                 "crneufxknr54rza.azurecr.io"
+                 => "[reference(.../registries/crneufxknr54rza).loginServer]"
+
+  containerApps  env[3]  ConnectionStrings__DefaultConnection
+                 => "[format('Server=tcp:{0},1433;...', reference(...), ...)]"
+
+  containerApps  env[14], env[15]  the App Insights connection strings
+                 => "[reference(.../components/appi-...).ConnectionString]"
+
+  roleAssignment properties.principalId
+                 "fbf4043e-..." => "[reference(.../userAssignedIdentities/...)]"
+
+Every one of these resolves to the value already deployed. The deployed
+connection string names User Id=a872d38d-... — the identity's CLIENT id, which
+is what SqlClient needs and is not the same as its principal id
+(fbf4043e-...). Both appear in this output and they are different values for
+the same identity, which is worth knowing before mistaking one for a defect.
+
+CATEGORY B — service-populated properties the template does not declare.
+
+Reported as removals. An Incremental-mode deployment does not remove them; only
+Complete mode would, and this deployment is Incremental (stated in the
+deployment record). Instances:
+
+  containerApps  ingress.exposedPort, ingress.traffic, runningStatus,
+                 workloadProfileName
+  registries     anonymousPullEnabled, dataEndpointEnabled, encryption,
+                 policies.azureADAuthenticationAsArmPolicy
+  topic          autoDeleteOnIdle, duplicateDetectionHistoryTimeWindow,
+                 enableExpress, enablePartitioning, maxMessageSizeInKilobytes,
+                 maxSizeInMegabytes
+  subscriptions  autoDeleteOnIdle, isClientAffine
+  appInsights    Flow_Type "Bluefield", Request_Source "rest"  (shown as ADDS —
+                 the service sets them, the template does not)
+
+These could be silenced by declaring every one of them in the template. That
+trade was rejected: a template that restates every service default is longer,
+is wrong the moment a default changes, and buries the properties that were
+actually chosen among the ones that were not.
+
+CATEGORY C — comparisons what-if declines to make.
+
+Marked `x`, on resources otherwise reported `= Nochange`:
+
+  serviceBus namespace   sku.tier
+  sql server             properties.version
+  sql database           properties.minCapacity, sku.capacity, sku.tier
+
+Plus the 3 Diagnostics: the Service Bus role assignments are extension
+resources whose IDs depend on a reference() resolved during deployment, so
+what-if cannot identify them at all. They deployed — all three appear in the
+deployment's outputResources.
+
+
+WHAT IS ACTUALLY UNCHANGED
+---------------------------
+
+9 resources report `= Nochange` outright, including the two that matter most
+for the claims made elsewhere:
+
+  .../firewallRules/client-106-192-193-230   the rule added by the SECOND
+                                             deploy, now owned and stable
+  .../rules/content-changes-only             the filter, after the $Default fix
+
+And the container app's `image` does not appear in the diff at all. This run
+passed no image name; a template without fetch-container-image.bicep would have
+shown the running image being replaced by the hello-world placeholder. That
+module is the difference between an infrastructure-only deployment being safe
+and being an outage, and this is the line that proves it rather than asserting
+it.

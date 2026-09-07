@@ -1,5 +1,8 @@
 <#
 .SYNOPSIS
+    SUPERSEDED BY infra/ AS OF DAY 23. Kept as the Day 5 record; not a
+    deployment route. Do not run it.
+
     Automated Azure Container Apps (ACA) Provisioning Script for QuotesApi.
 .DESCRIPTION
     Creates the Resource Group, Container Apps Environment, and Container App revision
@@ -16,6 +19,32 @@
     Container image to deploy (Default: quotes-api:0.1.0).
 .PARAMETER JwtSecret
     JWT signing key (Default: generated 32-character secure secret).
+
+.NOTES
+    WHY THIS IS HERE AND WHY IT SHOULD NOT BE RUN
+
+    Day 5 provisioned this application's infrastructure imperatively: this
+    script creates a resource group, a Container Apps Environment and a
+    container app with `az cli`. Day 23 replaced that with Bicep — see
+    ../infra/, and ../../../Day23/docs/day23-bicep-iac-submission.md.
+
+    The problem with running it now is not that it is broken. It is that it
+    would work. It creates resources the template does not describe, in a
+    resource group the template does not own, and the next
+    `az deployment sub what-if` would either report them as drift or not see
+    them at all. Two sources of truth for one set of infrastructure is the exact
+    condition Day 23 exists to remove — and a repository that keeps a working
+    imperative provisioner beside a declarative one has not really removed it.
+
+    It is kept rather than deleted because Day 5's write-up
+    (../docs/azure-container-apps.md and ../docs/azd-deployment.md) refers to it
+    and describes a real exercise that happened. Deleting it would leave those
+    documents referring to a file that never existed. This header is the
+    compromise: the history stays readable, and nobody deploys from here by
+    accident.
+
+    To deploy, use ../infra/ and the runbook at
+    ../../../Day23/docs/day23-deployment-runbook.md.
 #>
 
 [CmdletBinding()]

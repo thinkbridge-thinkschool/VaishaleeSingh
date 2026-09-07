@@ -8,11 +8,23 @@
     "location": {
       "value": "${AZURE_LOCATION}"
     },
+    "environmentType": {
+      "value": "${AZURE_ENVIRONMENT_TYPE=dev}"
+    },
     "quotesApiExists": {
       "value": "${SERVICE_QUOTES_API_RESOURCE_EXISTS=false}"
     },
     "quotesApiImageName": {
       "value": "${SERVICES_QUOTES_API_IMAGE_NAME}"
+    },
+    "jwtSecret": {
+      "value": "${JWT_SECRET}"
+    },
+    "sqlEntraAdminObjectId": {
+      "value": "${AZURE_PRINCIPAL_ID}"
+    },
+    "sqlEntraAdminLogin": {
+      "value": "${SQL_ENTRA_ADMIN_LOGIN}"
     }
   }
 }
