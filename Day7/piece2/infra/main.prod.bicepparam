@@ -56,27 +56,26 @@ param environmentType = 'prod'
 param resourceGroupName = 'thinkschool-prod-rg'
 param apiContainerAppName = 'quotes-api-prod'
 
-// centralindia, the same region as dev — and that is a decision with a
-// consequence, not a copy.
+// REPLACE BEFORE DEPLOYING. See the corresponding note in main.dev.bicepparam:
+// the region probe that briefly justified 'centralindia' here was invalid, and
+// centralindia is not permitted on this subscription at all.
 //
-// Only centralindia has been PROVEN permitted (00-preflight.ps1, 2026-09-08).
-// The subscription carries an "Allowed resource deployment regions" policy
-// whose full allowed set has not been read; a second region may well be
-// available and would be better. To find out:
+// The policy allows:
+//   indonesiacentral, malaysiawest, indiasouthcentral, uaenorth, koreacentral
 //
-//   az policy assignment list --query "[?displayName=='Allowed resource deployment regions'].parameters" -o json
+// Prod should take the SECOND viable region that Day24/scripts/01-region-fit.ps1
+// reports, different from dev's. Not a preference: createContainerAppsEnvironment
+// is true in both files, so a shared region puts two Container Apps Environments
+// in one place. The old subscription enforced one per region; whether this one
+// does is unmeasured. If prod fails with
+// MaxNumberOfRegionalEnvironmentsInSubExceeded there are two ways forward, and
+// guessing between them wastes a deployment:
 //
-// Because createContainerAppsEnvironment is true in both files, two environments
-// would land in one region. The old subscription enforced one Container Apps
-// Environment per region; whether this one does is UNMEASURED. If the prod
-// deployment fails with MaxNumberOfRegionalEnvironmentsInSubExceeded, there are
-// exactly two ways forward and guessing between them wastes a deployment:
-//
-//   1. Put prod in a second permitted region (preferred — find one above).
+//   1. A second permitted region (preferred — 01-region-fit.ps1 names them).
 //   2. Tear the dev stack down first, deploy prod, verify, tear prod down, then
-//      recreate dev. Sound only because prod is torn down anyway (see the header)
-//      and because the stack makes both teardowns clean.
-param location = 'centralindia'
+//      recreate dev. Sound only because prod is torn down anyway (see the
+//      header) and because the stack makes both teardowns clean.
+param location = 'REPLACE-WITH-01-REGION-FIT-SECOND-REGION'
 
 // Same mechanism as dev, read from JWT_SECRET at compile time. USE A DIFFERENT
 // KEY FROM DEV: sharing one means a dev-issued token is valid in production.

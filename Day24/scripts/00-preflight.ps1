@@ -115,22 +115,43 @@ if ($assignments) {
     }
 }
 
-foreach ($candidate in @($Region, $ProdRegion) | Where-Object { $_ }) {
-    $probeRg = "probe-region-$($candidate.ToLower())-rg"
+# THE RESOURCE-GROUP PROBE THAT USED TO LIVE HERE HAS BEEN REMOVED. It reported
+# a FALSE PASS, which is worse than reporting nothing.
+#
+# It created and deleted an empty resource group in the candidate region and
+# called success "permitted". centralindia passed it. centralindia is not in
+# this subscription's allowed-locations list. Azure's built-in "Allowed
+# locations" policy explicitly exempts
+# Microsoft.Resources/subscriptions/resourceGroups -- restricting where resource
+# GROUPS may live is a separate policy -- so a resource group can legitimately
+# be created in a region whose resources are all refused. A resource group is a
+# metadata record; the exemption is the design, not a loophole.
+#
+# Region fitness now needs two facts intersected, and 01-region-fit.ps1 does it:
+# what the policy permits, and what each required resource provider actually
+# offers there. Read the allowed list here; decide the region there.
+$allowed = az policy assignment list `
+    --query "[?displayName=='Allowed resource deployment regions'].parameters.listOfAllowedLocations.value" `
+    -o json 2>$null | ConvertFrom-Json
+$allowedFlat = @($allowed | ForEach-Object { $_ } | Where-Object { $_ })
+
+if ($allowedFlat.Count -gt 0) {
     Write-Host ''
-    Write-Host "  Probing '$candidate' with a throwaway resource group ($probeRg)..."
-    $created = az group create --name $probeRg --location $candidate -o json 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Write-Pass "'$candidate' is permitted."
-        $script:findings["region_$candidate"] = 'allowed'
-        az group delete --name $probeRg --yes --no-wait 2>&1 | Out-Null
-        Write-Host "    (probe group deleted)"
-    } else {
-        Write-Fail "'$candidate' was refused. Do not put it in a parameter file."
-        Write-Host "    $created" -ForegroundColor DarkGray
-        $script:findings["region_$candidate"] = 'REFUSED'
+    Write-Host "  Policy-allowed regions: $($allowedFlat -join ', ')"
+    $script:findings['allowed_regions'] = ($allowedFlat -join ', ')
+
+    foreach ($candidate in @($Region, $ProdRegion) | Where-Object { $_ }) {
+        if ($allowedFlat -contains $candidate.ToLower()) {
+            Write-Pass "'$candidate' is in the allowed list."
+        } else {
+            Write-Fail "'$candidate' is NOT in the allowed list. Do not put it in a parameter file."
+        }
     }
+} else {
+    Write-Warn 'Could not read the allowed-locations policy. Do not assume there is no restriction.'
 }
+
+Write-Warn 'Being in the allowed list is necessary, not sufficient -- a permitted region may not offer Container Apps, or a Static Web App. Run Day24/scripts/01-region-fit.ps1 next.'
 
 # ---------------------------------------------------------------------------
 # G2  Compute quota and resource providers

@@ -53,13 +53,26 @@ param environmentType = 'dev'
 param resourceGroupName = 'thinkschool-dev-rg'
 param apiContainerAppName = 'quotes-api-dev'
 
-// MEASURED, not assumed. This subscription does carry an "Allowed resource
-// deployment regions" policy assignment — 00-preflight.ps1 found it — and
-// centralindia survived the throwaway-resource-group probe on 2026-09-08.
-// That probe is the only thing that proves a region is permitted rather than
-// merely plausible: a refused region reports as a policy denial, which reads
-// like a permissions problem rather than a location one.
-param location = 'centralindia'
+// REPLACE BEFORE DEPLOYING — and note that this line was briefly set to
+// 'centralindia' on the strength of a probe that was WRONG. Recording that,
+// because the wrong answer is more instructive than the right one.
+//
+// The probe created and deleted an empty resource group in centralindia and
+// read success as "region permitted". It succeeded. centralindia is not in this
+// subscription's allowed-locations policy at all. Azure's built-in "Allowed
+// locations" policy exempts Microsoft.Resources/subscriptions/resourceGroups —
+// where resource GROUPS may live is a separate policy — so a resource group
+// places fine in a region where every resource inside it would be refused. A
+// resource group is a metadata record; the exemption is deliberate.
+//
+// This subscription permits exactly these:
+//   indonesiacentral, malaysiawest, indiasouthcentral, uaenorth, koreacentral
+//
+// Being on that list is necessary and not sufficient — three of those are new
+// regions and may not offer Container Apps. Day24/scripts/01-region-fit.ps1
+// intersects the policy list with what each required provider actually offers
+// and prints the line that belongs here.
+param location = 'REPLACE-WITH-01-REGION-FIT-RESULT'
 
 // The signing key is read from the environment at compile time, never written
 // into this file.
@@ -160,6 +173,12 @@ param sqlAutoPauseDelayMinutes = 60
 param sqlMaxSizeBytes = 2147483648
 param sqlBackupStorageRedundancy = 'Local'
 param sqlPublicNetworkAccess = 'Enabled'
+// Re-check this once 01-region-fit.ps1 names the region. The Day 23 value was
+// reasoned about centralindia specifically ("centralindia General Purpose Gen5
+// does not offer zone redundancy"), and centralindia is not where this is going
+// any more. False is still the safe answer — a region that does not support it
+// rejects true — but the REASON no longer applies, and an unexamined value
+// carried across a region change is how a stale justification survives.
 param sqlZoneRedundant = false
 
 // The machine that administers the server — needed by scripts/create-sql-user.ps1,
