@@ -233,7 +233,19 @@ function Probe([string] $Name, [string] $Url, [string] $Method, [string] $Body, 
             $args += $Url
 
             $code = (& curl.exe @args) 2>$null
-            $content = if (Test-Path $bodyFile) { [string](Get-Content $bodyFile -Raw) } else { '' }
+
+            # Get-Content -Raw returns $null for an EMPTY file, and under
+            # Set-StrictMode $null.Length throws
+            #   The property 'Length' cannot be found on this object
+            # which is what killed this script immediately after health/ready
+            # returned 200 -- the one probe whose response body is empty. The
+            # [string] cast does not help: it is applied to the result, and the
+            # result is already $null. Coalesce explicitly.
+            $content = ''
+            if (Test-Path $bodyFile) {
+                $raw = Get-Content $bodyFile -Raw
+                if ($null -ne $raw) { $content = [string]$raw }
+            }
 
             # 000 is curl's "no response at all" -- a cold start still waking, or
             # no healthy replica behind ingress. Distinct from an HTTP error, and

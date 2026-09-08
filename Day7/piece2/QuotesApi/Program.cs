@@ -173,8 +173,15 @@ if (Directory.Exists(spaRoot))
     //
     // Excluding health/ as well: an orchestrator probe that receives an HTML
     // 200 from a misconfigured route is a probe that can never fail.
+    // The alternation matches a segment followed by "/" OR by end-of-string.
+    // The first version was `^(?!api/|health/).*$`, which only excluded paths
+    // with a TRAILING SLASH -- so a request to exactly /health or /api fell
+    // through to the SPA shell and answered 200 with HTML. Harmless for /api,
+    // which is not an endpoint, but actively misleading for /health: anything
+    // probing that path would receive a cheerful 200 from a page, not from the
+    // app's health checks.
     app.MapFallbackToFile(
-        "{*path:regex(^(?!api/|health/).*$)}",
+        "{*path:regex(^(?!(api|health)(/|$)).*$)}",
         "index.html",
         spaOptions);
 }
