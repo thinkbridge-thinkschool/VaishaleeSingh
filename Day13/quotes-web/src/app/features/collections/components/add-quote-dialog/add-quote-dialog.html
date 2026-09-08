@@ -61,21 +61,37 @@
         }
       </ul>
 
-      <div class="picker__batch-actions">
-        <app-button
-          size="sm"
-          [loading]="adding()"
-          loadingLabel="Adding selected…"
-          [disabled]="adding() || selectedCount() === 0"
-          (pressed)="addSelectedQuotes()"
-        >
-          Add selected ({{ selectedCount() }})
-        </app-button>
-      </div>
     }
   </div>
 
+  <!--
+    THE ADD BUTTON LIVES IN THE FOOTER, and moving it here is a bug fix rather
+    than a layout preference.
+
+    It used to sit at the bottom of the dialog BODY, directly under the quote
+    list. The body scrolls, the footer does not -- so with four or more
+    candidates the primary action was below the fold while "Done" stayed pinned
+    and visible. The dialog looked complete: you could tick several quotes,
+    see them checked, and find no way to add them. It read as a broken button,
+    and it was reported as one. Nothing was broken; the control was simply
+    somewhere nobody would scroll to, because a pinned footer is exactly the
+    signal that there is nothing below it.
+
+    Add is the primary action, so it is first and prominent; Done is the way out
+    and stays secondary. It is disabled rather than hidden when nothing is
+    selected, so the count is always visible and the button never appears and
+    disappears under the cursor.
+  -->
   <ng-container ngProjectAs="[modalFooter]">
+    <app-button
+      [loading]="adding()"
+      loadingLabel="Adding selected…"
+      [disabled]="adding() || selectedCount() === 0"
+      (pressed)="addSelectedQuotes()"
+    >
+      Add selected ({{ selectedCount() }})
+    </app-button>
+
     <app-button variant="secondary" [disabled]="adding()" (pressed)="cancelled.emit()">
       Done
     </app-button>
