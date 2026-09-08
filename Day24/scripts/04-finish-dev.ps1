@@ -97,15 +97,38 @@ Ok "This machine: $env:SQL_CLIENT_IP"
 # ---------------------------------------------------------------------------
 Step 'Reconcile the stack, with the deny-settings exclusion'
 # ---------------------------------------------------------------------------
+# EXCLUDED PRINCIPAL, NOT A LIST OF EXCLUDED ACTIONS, and the first attempt
+# explains why. Passing two actions was rejected:
+#
+#   unrecognized arguments: Microsoft.Sql/servers/firewallRules/delete
+#
+# az attached the first value to --deny-settings-excluded-actions and treated
+# the second as a stray positional argument. The documentation describes it as a
+# list, so this may be version-specific, but a command that silently keeps only
+# the first of two protections is not one to guess at.
+#
+# Excluding the OPERATOR's own object id solves the root problem more directly
+# anyway. The deny assignment exists to stop resources being deleted out from
+# under the template -- an accidental portal delete, or a script nobody
+# remembers running. The person who owns the stack being locked out of the
+# stack's own housekeeping is not the hazard; it is the bug we hit twice.
+#
+# The trade-off, stated: this principal can now delete anything under the
+# stack's scope. That is a real reduction, and it is acceptable here because it
+# is the same account that can delete the stack outright. It would NOT be
+# acceptable for a CI principal or a shared operator group, where excluding the
+# single action is the narrower and better answer.
+$meId = az ad signed-in-user show --query id -o tsv
+if ([string]::IsNullOrWhiteSpace($meId)) { Bad 'Could not read the signed-in user object id.'; exit 1 }
+Ok "Excluding own principal from the deny assignment: $meId"
+
 Push-Location $apiRoot
 try {
     az stack sub create --name $StackName --location $Location `
         --template-file infra/main.bicep --parameters infra/main.dev.bicepparam `
         --action-on-unmanage deleteAll --deny-settings-mode denyDelete `
         --deny-settings-apply-to-child-scopes `
-        --deny-settings-excluded-actions `
-            'Microsoft.Resources/subscriptions/resourceGroups/delete' `
-            'Microsoft.Sql/servers/firewallRules/delete' `
+        --deny-settings-excluded-principals $meId `
         --description 'QuotesApi dev - Day 24' --yes -o none
 } finally { Pop-Location }
 
@@ -185,23 +208,51 @@ Write-Host "  $app"
 Note 'minReplicas is 0 in the template and the database is serverless, so the'
 Note 'first request pays a cold start plus a possible database resume.'
 
+# curl.exe, NOT Invoke-WebRequest, and this is the second thing the first run
+# taught. Invoke-WebRequest -SkipHttpErrorCheck exists only in PowerShell 7+;
+# on Windows PowerShell 5.1 every probe failed with
+#
+#   A parameter cannot be found that matches parameter name 'SkipHttpErrorCheck'
+#
+# twelve times per endpoint. Worse than a wrong result: the tests never reached
+# the app at all, so a healthy deployment reported five failures. Without that
+# switch, Invoke-WebRequest THROWS on any 4xx/5xx, which is useless here --
+# a 400 from /api/auth/login is the expected answer.
+#
+# curl.exe ships with Windows 10 1803 and later, behaves identically on
+# PowerShell 5.1 and 7, and is the same tool the GitHub workflow uses, so the
+# local probe and the CI probe cannot drift.
 function Probe([string] $Name, [string] $Url, [string] $Method, [string] $Body, [string] $MustContain) {
-    foreach ($i in 1..12) {
-        try {
-            $p = @{ Uri = $Url; TimeoutSec = 30; SkipHttpErrorCheck = $true; Method = $Method }
-            if ($Body) { $p.Body = $Body; $p.ContentType = 'application/json' }
-            $r = Invoke-WebRequest @p
-            $body = [string]$r.Content
-            if ($MustContain -and $body -notmatch [regex]::Escape($MustContain)) {
-                Write-Host "  $Name attempt $i : $($r.StatusCode), body did not contain '$MustContain'"
-            } else {
-                Ok "$Name -> $($r.StatusCode)"
+    $bodyFile = Join-Path $env:TEMP "probe-$([guid]::NewGuid().ToString('N')).txt"
+    try {
+        foreach ($i in 1..12) {
+            $args = @('-s', '-o', $bodyFile, '-w', '%{http_code}', '--max-time', '30')
+            if ($Method -eq 'POST') {
+                $args += @('-X', 'POST', '-H', 'Content-Type: application/json', '-d', $Body)
+            }
+            $args += $Url
+
+            $code = (& curl.exe @args) 2>$null
+            $content = if (Test-Path $bodyFile) { [string](Get-Content $bodyFile -Raw) } else { '' }
+
+            # 000 is curl's "no response at all" -- a cold start still waking, or
+            # no healthy replica behind ingress. Distinct from an HTTP error, and
+            # worth saying so rather than printing a bare 000.
+            if ($code -eq '000') {
+                Write-Host "  $Name attempt $i : no response yet (cold start or no healthy replica)"
+            }
+            elseif ($MustContain -and $content -notmatch [regex]::Escape($MustContain)) {
+                $preview = if ($content.Length -gt 120) { $content.Substring(0, 120) } else { $content }
+                Write-Host "  $Name attempt $i : HTTP $code but body lacked '$MustContain' -- $preview"
+            }
+            else {
+                Ok "$Name -> HTTP $code"
                 return $true
             }
-        } catch {
-            Write-Host "  $Name attempt $i : $($_.Exception.Message)"
+            Start-Sleep -Seconds 10
         }
-        Start-Sleep -Seconds 10
+    } finally {
+        Remove-Item $bodyFile -ErrorAction SilentlyContinue
     }
     Bad "$Name never succeeded."
     return $false

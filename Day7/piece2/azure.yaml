@@ -95,18 +95,33 @@ infra:
         # child resource this template deliberately churns.
         - Microsoft.Sql/servers/firewallRules/delete
 
-      # excludedPrincipals: FILLED IN AT PHASE E, deliberately left out until
-      # then. It takes the OBJECT ID of the GitHub Actions OIDC principal — on
-      # this subscription most likely a user-assigned managed identity rather
-      # than an app registration, because a university tenant commonly blocks
-      # non-admin app registration (see the plan, gate G3).
+      # excludedPrincipals. Commented out rather than stubbed with a
+      # placeholder GUID: ARM rejects an unresolvable principal, so a stub would
+      # fail every deployment rather than only the thing it protects.
       #
-      # It is commented out rather than stubbed with a placeholder GUID: ARM
-      # rejects an unresolvable principal, so a stub would fail every
-      # deployment until Phase E rather than only the pipeline it protects.
+      # Two entries belong here eventually:
+      #
+      #   * The OPERATOR running deployments by hand. Learned the hard way: with
+      #     applyToChildScopes true, the deny assignment refused the STACK'S OWN
+      #     deletion of a superseded SQL firewall rule, because the unmanage
+      #     delete runs in the caller's security context. Every subsequent
+      #     update then reported `failed` while the orphan accumulated. See
+      #     Day24/scripts/04-finish-dev.ps1, which passes
+      #     --deny-settings-excluded-principals for exactly this reason.
+      #
+      #   * The GitHub Actions OIDC principal (Phase D), so a control aimed at
+      #     accidental portal deletes never blocks the pipeline.
+      #
+      # A NOTE ON WHICH EXCLUSION TO REACH FOR. Excluding a PRINCIPAL is broad:
+      # that identity can then delete anything under the stack's scope.
+      # Excluding an ACTION is narrow and is the better answer for a shared or
+      # automated identity. The operator is the one case where the broad
+      # exclusion is defensible, because that account can delete the whole stack
+      # anyway. Do not extend the same reasoning to CI.
       #
       # excludedPrincipals:
-      #   - <object id of id-github-oidc>
+      #   - <operator object id>
+      #   - <github oidc principal object id>
 
 services:
   quotes-api:
