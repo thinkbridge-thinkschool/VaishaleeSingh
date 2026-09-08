@@ -43,6 +43,20 @@
   @if (store.quote(); as quote) {
     <app-page-header [title]="quote.author" [subtitle]="'Quote #' + quote.id" />
 
+    @if (canEdit()) {
+      <!--
+        Day 24. The edit form used to be reachable only from the modal preview
+        the card opened; the card navigates here now, so the control moved with
+        it. Shown only to the author -- the API answers 403 to anyone else, and
+        a button whose only outcome is a refusal is worse than no button.
+      -->
+      <div class="quote-detail__actions">
+        <app-button size="sm" [ariaLabel]="'Edit this quote'" (pressed)="openEdit()">
+          Edit quote
+        </app-button>
+      </div>
+    }
+
     <article
       class="quote-detail"
       [style.background-image]="
@@ -106,3 +120,18 @@
     </ul>
   }
 </section>
+
+
+<!--
+  The same dialog the list page uses for both create and edit: passing a quote
+  puts it in edit mode. One form, so the validation and the field-error wiring
+  cannot differ between the two screens.
+-->
+<app-quote-form-dialog
+  [open]="isEditOpen()"
+  [quote]="store.quote()"
+  [submitting]="quotesStore.isUpdating()"
+  [fieldErrors]="editFieldErrors()"
+  (submitted)="submitEdit($event)"
+  (cancelled)="closeEdit()"
+/>

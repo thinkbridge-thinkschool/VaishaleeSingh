@@ -2,8 +2,10 @@ import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@a
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 
-import { Quote, resolveQuoteBackgroundUrl } from '../../../../core/models/quote';
+import { Quote, UpdateQuoteRequest, resolveQuoteBackgroundUrl } from '../../../../core/models/quote';
 import { API_BASE_URL } from '../../../../core/services/api-base-url';
+import { Button } from '../../../../shared/components/button/button';
+import { QuoteFormDialog } from '../../components/quote-form-dialog/quote-form-dialog';
 import { EmptyState } from '../../../../shared/components/empty-state/empty-state';
 import { ErrorState } from '../../../../shared/components/error-state/error-state';
 import { Loader } from '../../../../shared/components/loader/loader';
@@ -63,7 +65,7 @@ function parseQuoteId(raw: string): number | null {
   styleUrl: './quote-detail-page.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
   providers: [QuoteDetailStore, QuotesStore],
-  imports: [RouterLink, PageHeader, Loader, ErrorState, EmptyState],
+  imports: [RouterLink, PageHeader, Loader, ErrorState, EmptyState, Button, QuoteFormDialog],
 })
 export class QuoteDetailPage {
   private readonly route = inject(ActivatedRoute);
@@ -104,6 +106,69 @@ export class QuoteDetailPage {
   protected readonly otherQuotes = computed<readonly Quote[]>(() =>
     this.quotesStore.items().filter((quote) => quote.id !== this.store.selectedId()),
   );
+
+  // --- Editing --------------------------------------------------------------
+  //
+  // Day 24. Clicking a quote used to open a modal PREVIEW, and that preview was
+  // the only route to the edit form. The card now navigates here instead, so
+  // without this the update feature would have become unreachable by removing a
+  // button -- a feature deleted by accident rather than by decision.
+  //
+  // QuotesStore is already provided on this page for the "more quotes" list, and
+  // it owns update() and isUpdating(). Reusing it means the edit here behaves
+  // exactly as the edit on the list page did, including how field errors come
+  // back, rather than being a second implementation that drifts.
+
+  protected readonly isEditOpen = signal(false);
+  protected readonly editFieldErrors = signal<Readonly<Record<string, readonly string[]>>>({});
+
+  /**
+   * Only the author may edit. The API enforces this with a 403 regardless, but
+   * showing a control that is guaranteed to fail is worse than not showing it:
+   * the reader learns the rule by being refused.
+   *
+   * isOwnedByCaller is QuotesStore's own predicate -- the same one behind the
+   * "yours" badge on the card -- so the button and the badge cannot disagree.
+   */
+  protected readonly canEdit = computed(() => {
+    const quote = this.store.quote();
+    return quote !== null && this.quotesStore.isOwnedByCaller(quote);
+  });
+
+  protected openEdit(): void {
+    if (!this.canEdit()) {
+      return;
+    }
+
+    this.editFieldErrors.set({});
+    this.isEditOpen.set(true);
+  }
+
+  protected closeEdit(): void {
+    this.isEditOpen.set(false);
+  }
+
+  protected async submitEdit(request: UpdateQuoteRequest): Promise<void> {
+    const quote = this.store.quote();
+
+    if (!quote) {
+      return;
+    }
+
+    const fieldErrors = await this.quotesStore.update(quote.id, request);
+
+    this.editFieldErrors.set(fieldErrors);
+
+    // Stays open when the API rejected the values, so the messages land next to
+    // the fields that caused them. On success the DETAIL store is reloaded --
+    // quotesStore.update() refreshes the list it owns, which is not what this
+    // screen renders, so without this the page would keep showing the old text
+    // after a successful save.
+    if (Object.keys(fieldErrors).length === 0) {
+      this.isEditOpen.set(false);
+      await this.store.load(quote.id);
+    }
+  }
 
   protected readonly backgroundImage = computed(() => {
     const quote = this.store.quote();
