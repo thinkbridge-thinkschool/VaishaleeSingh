@@ -26,13 +26,12 @@ on:
       # that fixed CrossCuttingTests silently did not re-run the deploy that
       # the test failure had blocked, which is the gate quietly not gating.
       - 'Day7/piece2/**'
-      # Day 24: the front end is now built INTO this image and served by the
-      # container, because Static Web Apps is unavailable in the new
-      # subscription's permitted regions. A front-end change therefore ships
-      # through this workflow. Omitting this path would mean an Angular commit
-      # going green in day17-swa-deploy.yml while the live site stayed on the
-      # previous bundle -- a deploy that reports success and changes nothing.
-      - 'Day13/quotes-web/**'
+      # Day13/quotes-web is deliberately NOT here. The front end is its own
+      # container app with its own image and its own workflow
+      # (day24-web-deploy.yml) -- the separation this project had on the
+      # previous subscription, restored. An Angular change must not rebuild
+      # and redeploy the API, and a broken bundle must not be able to block an
+      # API deployment.
       - '.github/workflows/day17-api-deploy.yml'
   workflow_dispatch:
 
@@ -89,45 +88,6 @@ jobs:
       # The gate. This workflow can push an image to a registry and repoint a
       # live Container App, so it does not get to skip the tests -- a green
       # ci.yml on some other commit is not evidence about this one.
-      # --- The front end, built into the API project -----------------------
-      # Day 24. These four steps used to live in day17-swa-deploy.yml and upload
-      # to a Static Web App. That resource cannot exist in this subscription, so
-      # the bundle is built here and copied into QuotesApi/spa/, which
-      # Program.cs serves and QuotesApi.csproj publishes into the image.
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: Day13/quotes-web/package-lock.json
-
-      # npm ci, not npm install: CI must fail on a lockfile that has drifted
-      # rather than quietly resolving something different from what was tested.
-      - name: Install the front end
-        working-directory: Day13/quotes-web
-        run: npm ci
-
-      - name: Build the front end
-        working-directory: Day13/quotes-web
-        run: npx ng build
-
-      # The bundle has to land where Program.cs looks for it. A mismatch here
-      # does not fail the build -- the app boots, skips the conditional SPA
-      # block because the directory is absent, and serves 404 on every route
-      # that is not /api or /health. So this step asserts the shape rather than
-      # trusting the copy.
-      - name: Stage the bundle into the API project
-        run: |
-          set -euo pipefail
-          src=Day13/quotes-web/dist/quotes-web/browser
-          dest=Day7/piece2/QuotesApi/spa
-          test -f "$src/index.html" || { echo "::error::$src/index.html missing -- ng build output moved"; exit 1; }
-          rm -rf "$dest"
-          mkdir -p "$dest"
-          cp -r "$src"/. "$dest"/
-          test -f "$dest/index.html" || { echo "::error::index.html did not reach $dest"; exit 1; }
-          echo "Staged $(find "$dest" -type f | wc -l) files into $dest"
-
       - name: Restore
         run: dotnet restore Day7/piece2/QuotesApi.slnx
 
@@ -260,20 +220,9 @@ jobs:
           [ "$api_ok" = true ] || { echo "::error::The API did not answer at $origin within 100s."; exit 1; }
           echo "The API answered."
 
-          # 2. The SPA. Checked for Angular's own marker rather than a 200: the
-          # root path returns 200 whether it serves index.html or a stray file,
-          # and <app-root> is what proves the Angular bundle is what got served.
-          root=$(curl -s --max-time 15 "$origin/" || true)
-          case "$root" in
-            *"<app-root"*) echo "The SPA shell is being served." ;;
-            *) echo "::error::GET / did not return the Angular shell. Check that spa/ reached the image -- Program.cs skips the SPA block silently when the directory is absent."
-               printf '%.300s\n' "$root"
-               exit 1 ;;
-          esac
-
-          # 3. A deep link, which is the whole reason the fallback exists. The
-          # Angular router owns /quotes; the server has no such route, so this
-          # must come back as the shell rather than a 404.
-          deep=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$origin/quotes" || true)
-          [ "$deep" = "200" ] || { echo "::error::GET /quotes returned $deep, not 200. The SPA fallback is not working, so every deep link and page refresh 404s."; exit 1; }
-          echo "Deep-link fallback works."
+          # The SPA probes that used to live here have moved to
+          # day24-web-deploy.yml, along with the bundle itself. This workflow
+          # asserts the API and nothing else -- which is the point of the
+          # split: a front-end regression must not turn an API deployment red,
+          # and an API smoke test that also checked HTML would do exactly that.
+          echo "API smoke test passed."

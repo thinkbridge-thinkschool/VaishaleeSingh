@@ -236,3 +236,13 @@ param serviceBusMessagingUnits = 1
 param serviceBusMessageTimeToLive = 'P1D'
 param serviceBusMaxDeliveryCount = 3
 param serviceBusLockDuration = 'PT1M'
+
+
+// --- Front end ------------------------------------------------------------
+// Day 24. Its own container app, its own image, its own workflow. See the
+// header of modules/web.bicep for why this is not a Static Web App and not
+// bundled into the API image.
+param webContainerAppName = 'quotes-web-dev'
+param webAppExists = true
+param webMinReplicas = 0
+param webMaxReplicas = 2

@@ -1,0 +1,18 @@
+# Day 24. Keeps the build context small and, more importantly, keeps HOST
+# artefacts out of the image build.
+#
+# node_modules is the one that matters. Without this line the host's
+# node_modules is copied into the build context and can shadow what `npm ci`
+# installs inside the container -- including native binaries built for the wrong
+# platform. That is the same class of problem day17-swa-deploy.yml already hit
+# from the other direction: a lockfile generated on Windows was missing
+# @emnapi/core and @emnapi/runtime, which only the linux-x64 optional dependency
+# graph pulls in.
+node_modules
+dist
+.angular
+.git
+.gitignore
+Dockerfile
+.dockerignore
+*.log

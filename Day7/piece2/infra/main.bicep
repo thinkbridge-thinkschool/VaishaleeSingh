@@ -170,6 +170,34 @@ param apiMemory string = '1Gi'
 param apiConcurrentRequests int = 50
 
 // ---------------------------------------------------------------------------
+// Front end
+// ---------------------------------------------------------------------------
+// Day 24. A SECOND container app, deployed from its own image and its own
+// workflow. On the previous subscription this was an Azure Static Web App with
+// a linked backend; staticSites is not available in any region this
+// subscription permits, so nginx in a container app takes its place. The
+// separation is the point, not the hosting technology: a front-end change must
+// not rebuild the API, and a broken bundle must not be able to take the API
+// down with it.
+
+@description('Name of the front-end container app. Unique within the Container Apps ENVIRONMENT.')
+param webContainerAppName string = 'quotes-web-dev'
+
+@description('Whether the front-end container app already exists, so its running image is read rather than overwritten. Same mechanism, and the same trap, as quotesApiExists.')
+param webAppExists bool = false
+
+@description('Fully qualified front-end image reference, supplied by its deployment. Empty on the very first deployment.')
+param webImageName string = ''
+
+@description('Replica floor for the front end. Scale-to-zero costs far less here than on the API: nginx serving static files starts in well under a second.')
+@minValue(0)
+param webMinReplicas int = 0
+
+@description('Replica ceiling for the front end.')
+@minValue(1)
+param webMaxReplicas int = 2
+
+// ---------------------------------------------------------------------------
 // SQL
 // ---------------------------------------------------------------------------
 
@@ -492,6 +520,50 @@ module api 'modules/api.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
+// The front end
+// ---------------------------------------------------------------------------
+// Same image-preservation dance as the API, for the same reason: an
+// infrastructure-only stack update must not revert a deployed bundle to the
+// placeholder. See modules/fetch-container-image.bicep and the note on
+// quotesApiExists in main.dev.bicepparam.
+module fetchLatestWebImage 'modules/fetch-container-image.bicep' = {
+  name: 'fetchLatestWebImage'
+  scope: rg
+  params: {
+    exists: webAppExists
+    containerAppName: webContainerAppName
+  }
+}
+
+var resolvedWebImage = !empty(webImageName)
+  ? webImageName
+  : (fetchLatestWebImage.outputs.?containers[?0].image ?? placeholderImage)
+
+module web 'modules/web.bicep' = {
+  name: 'web'
+  scope: rg
+  params: {
+    containerAppName: webContainerAppName
+    location: location
+    // azd-service-name is deliberately ABSENT. azure.yaml declares one service,
+    // quotes-api, and azd finds it by that tag. Tagging this app too would make
+    // azd try to deploy the .NET project into it. The front end is deployed by
+    // its own workflow, not by azd -- which is what separate deployments means.
+    tags: tags
+    containerAppsEnvironmentId: containerAppsEnvironment.outputs.environmentId
+    userAssignedIdentityResourceId: identity.outputs.identityResourceId
+    containerRegistryLoginServer: registry.outputs.containerRegistryLoginServer
+    imageName: resolvedWebImage
+    // The API's own URL, read from the module that just created it rather than
+    // written down anywhere. nginx proxies /api and /health here, so the browser
+    // stays same-origin and environment.production.ts keeps apiBaseUrl = ''.
+    apiBaseUrl: api.outputs.containerAppUri
+    minReplicas: webMinReplicas
+    maxReplicas: webMaxReplicas
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Outputs
 // ---------------------------------------------------------------------------
 // NAMES, NOT SECRETS. azd writes template outputs into .azure/<env>/.env, and
@@ -515,3 +587,5 @@ output AZURE_LOG_ANALYTICS_WORKSPACE_NAME string = monitoring.outputs.logAnalyti
 output AZURE_SQL_SERVER_FQDN string = sql.outputs.sqlServerFqdn
 output AZURE_SQL_DATABASE_NAME string = sql.outputs.databaseName
 output AZURE_SERVICE_BUS_FQDN string = serviceBus.outputs.namespaceFqdn
+output SERVICE_QUOTES_WEB_NAME string = web.outputs.containerAppName
+output SERVICE_QUOTES_WEB_URI string = web.outputs.containerAppUri

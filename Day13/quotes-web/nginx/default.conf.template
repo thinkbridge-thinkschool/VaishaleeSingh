@@ -1,0 +1,96 @@
+# Day 24. Serves the Angular bundle and proxies the API, so the browser only
+# ever talks to one origin.
+#
+# ${API_BASE_URL} is substituted at container start by the nginx:alpine entry
+# point (envsubst over /etc/nginx/templates). Set it as an environment variable
+# on the container app, e.g.
+#   https://quotes-api-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io
+
+server {
+    listen 8080;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # --- the API, proxied ---------------------------------------------------
+    # This block is what replaces the Static Web App's linked backend, and it is
+    # why Day13/quotes-web/src/environments/environment.production.ts needs no
+    # change: apiBaseUrl stays '' and every request is same-origin from the
+    # browser's point of view. The alternative -- calling the API's own hostname
+    # directly -- would need an entry in the API's Cors:AllowedOrigins and a
+    # preflight on every request, which is a surface this project has avoided
+    # since Day 13.
+    #
+    # BEFORE the SPA fallback, deliberately. If the fallback matched first, an
+    # API 404 would come back as index.html with a 200, and a client parsing
+    # JSON would get a syntax error instead of a status it could act on. That is
+    # the exact hazard staticwebapp.config.json's navigationFallback.exclude
+    # existed to prevent.
+    location /api/ {
+        proxy_pass         ${API_BASE_URL};
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $proxy_host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+
+        # Host is set to $proxy_host, not the incoming $host. Azure Container
+        # Apps routes on SNI and the Host header; forwarding the front end's
+        # hostname makes the backend's ingress fail to match a revision and
+        # answer 404. The original client host is preserved in
+        # X-Forwarded-Host below for anything that needs it.
+        proxy_set_header   X-Forwarded-Host  $host;
+
+        # The backend is HTTPS with a real certificate, so verification stays
+        # on. Turning it off here would be the sort of quiet downgrade that
+        # survives into production.
+        proxy_ssl_server_name on;
+
+        # A cold backend scaled to zero takes tens of seconds to answer its
+        # first request, and the default 60s read timeout is not always enough
+        # when the serverless database is also resuming.
+        proxy_connect_timeout 30s;
+        proxy_read_timeout    120s;
+    }
+
+    # The API's health endpoints, proxied too, so a probe against the front end
+    # can distinguish "the SPA is served" from "the whole stack is up".
+    location /health/ {
+        proxy_pass         ${API_BASE_URL};
+        proxy_http_version 1.1;
+        proxy_set_header   Host $proxy_host;
+        proxy_ssl_server_name on;
+    }
+
+    # --- hashed assets ------------------------------------------------------
+    # ng build fingerprints every chunk, so these can be cached hard: the
+    # filename changes when the content does. index.html must NOT be, or a
+    # browser keeps loading an old shell that references chunks that no longer
+    # exist -- a 404 storm after every deploy.
+    location ~* \.(?:js|css|woff2?|png|jpe?g|webp|svg|ico)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+
+    # --- the SPA fallback ---------------------------------------------------
+    # One line, and it is the entire reason this container exists rather than
+    # the API serving the bundle. try_files checks the filesystem FIRST and only
+    # falls back to index.html when no file matches, which is what a SPA
+    # fallback is supposed to mean. There is no endpoint routing to collide
+    # with, so a real asset can never be answered with HTML.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # index.html revalidated every time: it is the file that names the current
+    # chunk hashes.
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+    }
+
+    gzip              on;
+    gzip_types        text/plain text/css application/javascript application/json image/svg+xml;
+    gzip_min_length   1024;
+}
