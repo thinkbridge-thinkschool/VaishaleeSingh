@@ -186,6 +186,40 @@ if (Directory.Exists(spaRoot))
         spaOptions);
 }
 
+// UseRouting HERE, EXPLICITLY, AND THE PLACEMENT IS THE WHOLE POINT.
+//
+// This one line is the difference between a working front end and an app that
+// serves index.html for every asset it owns. It cost an afternoon to find, and
+// the failure looked nothing like its cause.
+//
+// StaticFileMiddleware DOES NOT SERVE A FILE IF ROUTING HAS ALREADY SELECTED AN
+// ENDPOINT. That is deliberate on its part: an endpoint won the request, so a
+// file should not silently pre-empt it. And WebApplication PREPENDS UseRouting
+// to the front of the pipeline when you never call it yourself -- convenient
+// right up to the moment you add a catch-all route.
+//
+// MapFallbackToFile above matches every path that is not api/ or health/. So
+// routing selected an endpoint for essentially every request BEFORE the static
+// file middleware ran, both UseStaticFiles calls passed straight through, and
+// the fallback answered everything with the SPA shell:
+//
+//   /main-<hash>.js  ->  200, Content-Type: text/html, body = index.html
+//
+// A module script served as HTML never executes, so <app-root> stayed empty and
+// NOTHING was logged -- no console error, no server error, an apparently
+// healthy app rendering a blank page. The tell was that wwwroot assets broke
+// too (/quote-backgrounds/*.jpg, which predate the SPA work entirely): a bug in
+// the SPA block could not explain that, but poisoning routing for the whole app
+// could.
+//
+// Calling UseRouting explicitly stops WebApplication prepending its own, so the
+// pipeline becomes: static files first, routing second. Files win when a file
+// exists; the fallback answers only what no file matched, which is what a SPA
+// fallback is supposed to mean.
+//
+// Do not move this above the UseStaticFiles calls.
+app.UseRouting();
+
 // Applies any pending EF Core migrations on startup, so the database schema
 // is always up to date before the app starts accepting requests.
 //
