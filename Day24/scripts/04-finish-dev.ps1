@@ -223,38 +223,51 @@ Note 'first request pays a cold start plus a possible database resume.'
 # PowerShell 5.1 and 7, and is the same tool the GitHub workflow uses, so the
 # local probe and the CI probe cannot drift.
 function Probe([string] $Name, [string] $Url, [string] $Method, [string] $Body, [string] $MustContain) {
-    $bodyFile = Join-Path $env:TEMP "probe-$([guid]::NewGuid().ToString('N')).txt"
+    $bodyFile = Join-Path $env:TEMP ("probe-" + [guid]::NewGuid().ToString('N') + ".txt")
     try {
         foreach ($i in 1..12) {
-            $args = @('-s', '-o', $bodyFile, '-w', '%{http_code}', '--max-time', '30')
-            if ($Method -eq 'POST') {
-                $args += @('-X', 'POST', '-H', 'Content-Type: application/json', '-d', $Body)
-            }
-            $args += $Url
 
-            $code = (& curl.exe @args) 2>$null
+            # NO $args, AND NO SPLATTING. The previous version built an array
+            # called $args and invoked `& curl.exe @args`. $args is a PowerShell
+            # AUTOMATIC variable inside a function -- it holds the unbound
+            # arguments -- so assigning to it and then splatting it is not the
+            # local array being passed, and under Set-StrictMode the whole thing
+            # died with
+            #   The property 'Length' cannot be found on this object
+            # immediately after the first probe succeeded. The message named a
+            # property nobody had written, which is what made it hard to place:
+            # it comes from inside the splatting machinery, not from this code.
+            #
+            # Two explicit calls instead. Slightly repetitive, and it cannot be
+            # wrong in a way that reports someone else's error.
+            if ($Method -eq 'POST') {
+                $code = & curl.exe -s -o $bodyFile -w '%{http_code}' --max-time 30 `
+                            -X POST -H 'Content-Type: application/json' -d $Body $Url
+            } else {
+                $code = & curl.exe -s -o $bodyFile -w '%{http_code}' --max-time 30 $Url
+            }
+            $code = [string]$code
 
             # Get-Content -Raw returns $null for an EMPTY file, and under
-            # Set-StrictMode $null.Length throws
-            #   The property 'Length' cannot be found on this object
-            # which is what killed this script immediately after health/ready
-            # returned 200 -- the one probe whose response body is empty. The
-            # [string] cast does not help: it is applied to the result, and the
-            # result is already $null. Coalesce explicitly.
+            # Set-StrictMode $null.Length throws. /health/ready is precisely the
+            # probe with an empty body, so the first success was also the first
+            # crash. Coalesce rather than cast: the cast applies to the result,
+            # and the result is already $null.
             $content = ''
             if (Test-Path $bodyFile) {
                 $raw = Get-Content $bodyFile -Raw
                 if ($null -ne $raw) { $content = [string]$raw }
             }
 
-            # 000 is curl's "no response at all" -- a cold start still waking, or
-            # no healthy replica behind ingress. Distinct from an HTTP error, and
-            # worth saying so rather than printing a bare 000.
+            # 000 is curl's "no response at all" -- a cold start still waking,
+            # or no healthy replica behind ingress. Worth distinguishing from an
+            # HTTP error rather than printing a bare 000.
             if ($code -eq '000') {
                 Write-Host "  $Name attempt $i : no response yet (cold start or no healthy replica)"
             }
-            elseif ($MustContain -and $content -notmatch [regex]::Escape($MustContain)) {
-                $preview = if ($content.Length -gt 120) { $content.Substring(0, 120) } else { $content }
+            elseif ($MustContain -and ($content -notmatch [regex]::Escape($MustContain))) {
+                $preview = $content
+                if ($preview.Length -gt 120) { $preview = $preview.Substring(0, 120) }
                 Write-Host "  $Name attempt $i : HTTP $code but body lacked '$MustContain' -- $preview"
             }
             else {
