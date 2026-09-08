@@ -171,10 +171,36 @@ the identity access to the server and no user inside the database, so an app
 deployed first starts, fails to log in, and sits permanently unready. The script
 is idempotent. See the header of `modules/sql.bicep`.
 
-## What is still not described here
+## Front end and back end deploy as two separate container apps
 
-The Static Web App, its linked backend, and the Container Apps authentication
-that keeps the API unreachable from the internet were wired by hand on Day 17
-and remain outside this template. They are re-created by hand in the new
-subscription. A knowingly-carried gap, not an oversight — writing them in now
-would mean shipping infrastructure that has never been deployed.
+Azure Static Web Apps is not available in any region this subscription's
+policy permits (`Microsoft.Web/staticSites` is not offered in
+`indonesiacentral`/`malaysiawest`/`indiasouthcentral`/`uaenorth`/`koreacentral`),
+so the Angular front end is not served by Static Web Apps here, and it is not
+bundled into the API's container either. `modules/web.bicep` provisions it as
+its own Container App (`quotes-web-<env>`), running the nginx image built from
+`Day13/quotes-web/Dockerfile`, alongside `modules/api.bicep`'s API Container App
+(`quotes-api-<env>`) — both in this stack, both behind the same Container Apps
+Environment, deployed independently:
+
+- the API rolls on pushes to `main` under `Day7/piece2/**` via
+  `.github/workflows/day17-api-deploy.yml`;
+- the front end rolls on pushes to `main` under `Day13/quotes-web/**` via
+  `.github/workflows/day24-web-deploy.yml`.
+
+`web.bicep` only receives `apiBaseUrl` (the API container app's ingress URI) as
+a plain environment variable; nginx's `envsubst` templating
+(`Day13/quotes-web/nginx/default.conf.template`) turns that into a same-region
+reverse-proxy for `/api/` and `/health/` at container start, so the browser
+still calls one same-origin host and CORS never enters the picture. Neither
+app is part of `services:` in `azure.yaml` for the front end — only
+`quotes-api` deploys through `azd`; the web container app is provisioned by
+this stack but rolled by its own workflow, the same way the API's own image
+updates are (see the `denySettings` comment in `azure.yaml` for why).
+
+The Container Apps authentication that gated the old Static Web App's linked
+backend has no equivalent here: the API's ingress is external by design and
+the API defends itself with its own JWT authentication. That is a real
+reduction in defence-in-depth versus the Day 17 arrangement, forced by a
+policy this project does not control, and it is recorded as a deviation in
+`Day24/docs/day24-deployment-stacks-azd-migration-plan.md`.

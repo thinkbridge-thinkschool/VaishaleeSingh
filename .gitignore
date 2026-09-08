@@ -58,11 +58,3 @@ Day22/verification/day22-api-stderr.log
 # connected workspace. They are duplicates of files that already live at their
 # real paths; committing them would give every deliverable two homes that drift.
 Claude outputs/
-
-# Day 24 -- the Angular bundle, built into the API project so the container can
-# serve it (Static Web Apps is not available in the new subscription's permitted
-# regions). Build output from Day13/quotes-web, not source: committing it would
-# put a second, silently-stale copy of the front end in the repository, and the
-# hashed filenames would make every front-end change a large binary-ish diff.
-# The deploy workflow builds it; nothing else needs it to exist.
-Day7/piece2/QuotesApi/spa/
