@@ -99,9 +99,10 @@ this run) into subscription `85567e22-432e-4648-aa68-ba2714167694`, region
 `uaenorth`.
 
 The create plan (`az deployment sub what-if`, run before the first apply)
-confirms the stack was about to provision the resource group and the API
-container app from nothing — this is the saved evidence in
-`Day24/verification/what-if-dev.txt`:
+confirmed the stack was about to provision the resource group and the API
+container app from nothing — excerpt below (the full run is not kept on disk;
+the final stack state, not this initial plan, is the evidence that matters
+once deployed):
 
 ```
 Resource and property changes are indicated with these symbols:
