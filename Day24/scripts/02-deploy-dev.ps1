@@ -359,13 +359,51 @@ try {
     # being replaced by a workaround. It runs second, and a failure there is a
     # warning rather than fatal: the image is already pushed and step 10 rolls
     # the app onto it either way.
+    # NO DOCKER ANYWHERE IN THIS STEP, and that is a correction rather than a
+    # preference. The first attempt used `az acr login`, which drives the Docker
+    # CLI, and on a machine without Docker Desktop running it fails with
+    #
+    #   failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine
+    #
+    # and then the SDK's own push fails a second time for the same underlying
+    # reason, wearing a completely different message:
+    #
+    #   error CONTAINER1013: Failed to push to the output registry:
+    #   CONTAINER1008: Failed retrieving credentials for "<acr>.azurecr.io":
+    #   Failed to execute 'docker-credential-desktop.EXE get':
+    #   credentials not found in native keychain
+    #
+    # Neither message says "Docker is not running", and the second actively
+    # misleads -- it reads like a registry permissions problem. This is also the
+    # most likely explanation for `azd deploy` sitting at 21 minutes and then
+    # timing out with no error: it was waiting on the same absent daemon.
+    #
+    # The SDK does not need a daemon to build or push an image. It reads
+    # SDK_CONTAINER_REGISTRY_UNAME / _PWORD directly, and `az acr login
+    # --expose-token` returns an ACR refresh token without touching Docker. The
+    # username for token auth is the null GUID -- that is ACR's convention, not
+    # a placeholder left in by mistake.
     $imageTag = "dev-$(Get-Date -Format 'yyyyMMddHHmmss')"
-    Invoke-Checked 'az acr login' { az acr login --name ($acrEndpoint.Split('.')[0]) }
-    Invoke-Checked 'dotnet publish container' {
-        dotnet publish QuotesApi/QuotesApi.csproj -c Release /t:PublishContainer `
-            -p:ContainerRegistry=$acrEndpoint `
-            -p:ContainerRepository=quotes-api `
-            -p:ContainerImageTag=$imageTag
+    $acrName  = $acrEndpoint.Split('.')[0]
+
+    $tokenJson = az acr login --name $acrName --expose-token -o json 2>$null | ConvertFrom-Json
+    if (-not $tokenJson.accessToken) { Die "Could not get an ACR token for $acrName." }
+    $env:SDK_CONTAINER_REGISTRY_UNAME = '00000000-0000-0000-0000-000000000000'
+    $env:SDK_CONTAINER_REGISTRY_PWORD = $tokenJson.accessToken
+    Ok 'Got an ACR refresh token (no Docker involved).'
+
+    try {
+        Invoke-Checked 'dotnet publish container' {
+            dotnet publish QuotesApi/QuotesApi.csproj -c Release /t:PublishContainer `
+                -p:ContainerRegistry=$acrEndpoint `
+                -p:ContainerRepository=quotes-api `
+                -p:ContainerImageTag=$imageTag
+        }
+    } finally {
+        # The token is short-lived, but leaving a registry credential in the
+        # session's environment for the rest of the day is still worse than not.
+        Remove-Item Env:SDK_CONTAINER_REGISTRY_UNAME -ErrorAction SilentlyContinue
+        Remove-Item Env:SDK_CONTAINER_REGISTRY_PWORD -ErrorAction SilentlyContinue
     }
     Ok "Pushed $acrEndpoint/quotes-api:$imageTag"
 

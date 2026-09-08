@@ -20,10 +20,15 @@
        docs/containerising.md.
 
        ContainerRepository, not ContainerImageName: the property was
-       renamed in .NET 8, and the old name is the deprecated spelling.
-       Both are kept here (see below) so the local/manual build in
-       docs/containerising.md keeps producing quotes-api, not an
-       SDK-default name derived from the assembly.
+       renamed in .NET 8. Both used to be set here, on the theory that the
+       old spelling was what kept the local build in
+       docs/containerising.md producing quotes-api rather than an
+       SDK-default name derived from the assembly. It was not.
+       ContainerRepository alone does that, and keeping the obsolete
+       spelling bought only a warning on every build:
+         warning CONTAINER003: The property 'ContainerImageName' was set
+         but is obsolete, please use 'ContainerRepository' instead.
+       Removed on Day 24, verified against the image this project pushes.
 
        ContainerFamily and ContainerBaseImage are gone. They pinned this
        project to the Alpine base image, which docs/azd-deployment.md
@@ -54,7 +59,6 @@
   -->
   <PropertyGroup>
     <ContainerRepository>quotes-api</ContainerRepository>
-    <ContainerImageName>quotes-api</ContainerImageName>
 
     <!-- Both, deliberately. The documentation says ContainerImageTag
          falls back to $(Version), so this file first set Version alone on
