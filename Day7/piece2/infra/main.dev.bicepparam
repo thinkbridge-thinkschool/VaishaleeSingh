@@ -53,6 +53,32 @@ param environmentType = 'dev'
 param resourceGroupName = 'thinkschool-dev-rg'
 param apiContainerAppName = 'quotes-api-dev'
 
+// TRUE, AND THE DEFAULT OF FALSE COST A DEPLOYED IMAGE.
+//
+// main.bicep threads this into modules/fetch-container-image.bicep, which
+// decides whether to LOOK UP the image the container app is currently running
+// instead of overwriting it. With it false, resolvedApiImage falls through to
+// the aci-helloworld placeholder, so an infrastructure-only stack update
+// silently reverts a working deployment to a hello-world page. That is exactly
+// what happened on the stack update that refreshed the SQL firewall rule: the
+// intent was one firewall rule, and the effect included rolling the API back to
+// the placeholder.
+//
+// The template already had the guard. It just was not switched on from this
+// file: azd sets it from SERVICE_QUOTES_API_RESOURCE_EXISTS via
+// main.parameters.json, and NEITHER .bicepparam file set it at all, so every
+// `az stack sub create` / `az deployment sub create` ran with it false. Day 23
+// never noticed because the deploy it tested was followed immediately by an
+// image push; the revert only shows when infrastructure is updated on its own,
+// which is precisely what a stack is for.
+//
+// MUST BE FALSE FOR THE VERY FIRST DEPLOYMENT into a brand-new environment,
+// where there is no container app to read an image from. Set it back to true
+// straight after. This is stated rather than automated because a wrong value in
+// either direction is recoverable in one redeploy, and a clever expression here
+// would be one more thing to be wrong.
+param quotesApiExists = true
+
 // REPLACE BEFORE DEPLOYING — and note that this line was briefly set to
 // 'centralindia' on the strength of a probe that was WRONG. Recording that,
 // because the wrong answer is more instructive than the right one.

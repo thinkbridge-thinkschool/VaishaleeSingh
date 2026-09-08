@@ -299,16 +299,3 @@ END;
 COMMIT;
 GO
 
-BEGIN TRANSACTION;
-IF NOT EXISTS (
-    SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20260908113633_SyncModelDay24'
-)
-BEGIN
-    INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-    VALUES (N'20260908113633_SyncModelDay24', N'10.0.10');
-END;
-
-COMMIT;
-GO
-

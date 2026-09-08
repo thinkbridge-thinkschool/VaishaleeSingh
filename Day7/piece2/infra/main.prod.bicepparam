@@ -56,6 +56,14 @@ param environmentType = 'prod'
 param resourceGroupName = 'thinkschool-prod-rg'
 param apiContainerAppName = 'quotes-api-prod'
 
+// FALSE here, unlike dev, and not by oversight: prod has never been deployed,
+// so there is no container app whose running image could be read. It must be
+// flipped to true immediately after the first successful deployment, or the
+// next infrastructure-only stack update reverts the API to the aci-helloworld
+// placeholder. See the long note on this parameter in main.dev.bicepparam,
+// which is written from having had it happen.
+param quotesApiExists = false
+
 // REPLACE BEFORE DEPLOYING. See the corresponding note in main.dev.bicepparam:
 // the region probe that briefly justified 'centralindia' here was invalid, and
 // centralindia is not permitted on this subscription at all.
