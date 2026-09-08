@@ -72,7 +72,14 @@ param apiContainerAppName = 'quotes-api-dev'
 // regions and may not offer Container Apps. Day24/scripts/01-region-fit.ps1
 // intersects the policy list with what each required provider actually offers
 // and prints the line that belongs here.
-param location = 'REPLACE-WITH-01-REGION-FIT-RESULT'
+// uaenorth. Chosen from the four that 01-region-fit.ps1 found viable
+// (indonesiacentral, malaysiawest, uaenorth, koreacentral) on two grounds:
+// it is the lowest-latency of them to India, and it is a mature region.
+// Indonesia Central and Malaysia West are recent enough that a specific SKU can
+// be missing even where the provider lists the region — the fit check reads
+// provider/resourceType availability, which is coarser than SKU availability.
+// indiasouthcentral is permitted by policy but offers no Container Apps at all.
+param location = 'uaenorth'
 
 // The signing key is read from the environment at compile time, never written
 // into this file.

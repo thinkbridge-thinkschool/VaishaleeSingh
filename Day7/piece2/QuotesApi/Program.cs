@@ -1,5 +1,6 @@
 using Azure.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.FileProviders;
 using QuotesApi.Data;
 using QuotesApi.Extensions;
 using QuotesApi.Middleware;
@@ -119,6 +120,64 @@ app.UseMiddleware<ExceptionHandlingMiddleware>();
 
 // Backend-owned static assets (quote backgrounds) served from wwwroot.
 app.UseStaticFiles();
+
+// --- The Angular front end, served by this app ------------------------------
+// Day 24. Until now the SPA was hosted by Azure Static Web Apps, which
+// reverse-proxied /api/* to this container over a linked backend. That is not
+// available in the new subscription: Microsoft.Web/staticSites exists in only a
+// handful of regions worldwide and none of them are permitted by this
+// subscription's allowed-locations policy. So the SPA is served from here.
+//
+// This is the arrangement the front end already assumed, which is why it needs
+// no change: Day13/quotes-web/src/environments/environment.production.ts sets
+// apiBaseUrl to '' and its own comment says that is correct "when the SPA is
+// served from the same host as the API -- behind the same reverse proxy,
+// ingress, or Azure Container Apps ingress rule". Every request is now
+// same-origin.
+//
+// A SEPARATE DIRECTORY, NOT wwwroot. wwwroot holds assets this backend owns and
+// commits; the SPA is build output from another project. Mixing them means a
+// stale main-<hash>.js from a previous build sits in source control next to a
+// quote background, and no one can tell which files are which. spa/ is
+// gitignored in its entirety.
+//
+// CONDITIONAL, and that is the load-bearing part. The directory does not exist
+// during local `dotnet run`, in the unit and integration suites, or in ci.yml --
+// only the deploy workflow builds the Angular bundle into it. An unconditional
+// PhysicalFileProvider on a missing directory throws at startup, which would
+// turn "the front end was not built" into "the API will not boot".
+var spaRoot = Path.Combine(app.Environment.ContentRootPath, "spa");
+if (Directory.Exists(spaRoot))
+{
+    var spaFiles = new PhysicalFileProvider(spaRoot);
+    var spaOptions = new StaticFileOptions { FileProvider = spaFiles };
+
+    // Serves index.html for a request to "/" itself. Without it, "/" is a
+    // directory with no handler and answers 404 while every deep link works --
+    // a failure mode that looks like a routing bug in the SPA.
+    app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = spaFiles });
+    app.UseStaticFiles(spaOptions);
+
+    // The SPA fallback: any unmatched path returns index.html so the Angular
+    // router can handle it client-side.
+    //
+    // THE REGEX IS THE WHOLE POINT, AND IT REPLACES A CONFIG FILE. The Static
+    // Web App did this with navigationFallback.exclude: ["/api/*"] in
+    // staticwebapp.config.json, and day17-swa-deploy.yml asserted that entry was
+    // present because without it "API errors return index.html with a 200" --
+    // its own words. The same hazard exists here: a bare
+    // MapFallbackToFile("index.html") answers an unmatched /api/quotes/99999
+    // with the HTML shell and a 200, so a client parsing JSON gets a syntax
+    // error instead of a 404, and a smoke test that only checks status codes
+    // passes against a broken API.
+    //
+    // Excluding health/ as well: an orchestrator probe that receives an HTML
+    // 200 from a misconfigured route is a probe that can never fail.
+    app.MapFallbackToFile(
+        "{*path:regex(^(?!api/|health/).*$)}",
+        "index.html",
+        spaOptions);
+}
 
 // Applies any pending EF Core migrations on startup, so the database schema
 // is always up to date before the app starts accepting requests.

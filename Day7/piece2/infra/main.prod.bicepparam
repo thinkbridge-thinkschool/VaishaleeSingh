@@ -75,7 +75,13 @@ param apiContainerAppName = 'quotes-api-prod'
 //   2. Tear the dev stack down first, deploy prod, verify, tear prod down, then
 //      recreate dev. Sound only because prod is torn down anyway (see the
 //      header) and because the stack makes both teardowns clean.
-param location = 'REPLACE-WITH-01-REGION-FIT-SECOND-REGION'
+// koreacentral — a DIFFERENT region from dev's uaenorth, and that is the point.
+// createContainerAppsEnvironment is true in both files, so a shared region would
+// put two Container Apps Environments in one place and risk the one-per-region
+// limit the old subscription enforced. Two regions sidesteps a constraint that
+// has not been measured here rather than discovering it mid-deployment.
+// Also mature, unlike the two Southeast Asian alternatives.
+param location = 'koreacentral'
 
 // Same mechanism as dev, read from JWT_SECRET at compile time. USE A DIFFERENT
 // KEY FROM DEV: sharing one means a dev-issued token is valid in production.
@@ -181,37 +187,22 @@ param sqlZoneRedundant = false
 // If group creation is blocked in that tenant — university tenants often
 // restrict it — fall back to the G5 user with principalType 'User' and record
 // that as a stated deviation. Do not ship zeros.
-// STILL A PLACEHOLDER, and the reason is now specific rather than pending.
-// 00-preflight.ps1 could not read the tenant's authorization policy at all —
-// Microsoft Graph returned nothing for defaultUserRolePermissions, which is what
-// a directory that withholds Graph reads from ordinary members looks like. So
-// whether `az ad group create` is permitted here is unknown, and a university
-// tenant commonly forbids it.
+// A real group, created in the Amity tenant on 2026-09-08 and resolvable —
+// unlike Day 23's 00000000-0000-0000-0000-000000000000, which is fine for a
+// what-if and rejected by a deployment.
 //
-// Settle it with one command before touching this line:
+// This was not a given. 00-preflight.ps1 could not read the tenant's
+// authorization policy (Graph returned nothing for defaultUserRolePermissions),
+// so whether directory writes were permitted was genuinely unknown until
+// `az ad app create` was tried and succeeded. Had it been refused, the fallback
+// was the dev user with principalType 'User' — a real weakening of the
+// production design, and one that would have been recorded as a deviation
+// rather than quietly adopted.
 //
-//   az ad group create --display-name quotes-sql-admins --mail-nickname quotes-sql-admins
-//
-// If it succeeds — use the group, which is the right shape: a production
-// database whose only administrator is one named individual loses its
-// administrator when that person changes role.
-//
-//   az ad group member add --group quotes-sql-admins --member-id (az ad signed-in-user show --query id -o tsv)
-//   az ad group show --group quotes-sql-admins --query id -o tsv
-//
-// If it is refused — fall back to the same user dev uses, and switch
-// principalType to 'User':
-//
-//   param sqlEntraAdminObjectId = 'a59d00a8-a829-49b4-83d1-952727eea166'
-//   param sqlEntraAdminLogin = 'vaishalee.singh@s.amity.edu'
-//   param sqlEntraAdminPrincipalType = 'User'
-//
-// That is a real weakening of the production design, forced by a directory
-// this project does not control. Record it as a stated deviation in the
-// submission. Do not ship zeros either way — an unresolvable object ID is
-// rejected at deploy time, which is the one honest thing about the Day 23
-// placeholder and the reason it is not simply carried forward.
-param sqlEntraAdminObjectId = 'REPLACE-WITH-PROD-ADMIN-GROUP-OBJECT-ID'
+// Membership is the operational half and is not visible in this file:
+//   az ad group member list --group quotes-sql-admins --query "[].userPrincipalName" -o tsv
+// An empty group administers nothing.
+param sqlEntraAdminObjectId = 'aad084c3-ebcf-495f-9c13-01415848fab4'
 param sqlEntraAdminLogin = 'quotes-sql-admins'
 param sqlEntraAdminPrincipalType = 'Group'
 

@@ -90,6 +90,29 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Day 24: the Angular bundle, when it has been built into spa/.
+         See the "Angular front end" block in Program.cs for why it is served
+         from here rather than from Azure Static Web Apps.
+
+         The glob matches nothing when spa/ is absent, which is the normal case
+         locally and in ci.yml -- only the deploy workflow builds into it. That
+         is deliberate: an empty glob is silent, whereas an SDK item pointing at
+         a required-but-missing directory fails the build.
+
+         CopyToPublishDirectory rather than CopyToOutputDirectory: these files
+         are needed in the published image, not in bin/ during `dotnet run`
+         (where the SPA is served by `ng serve` on its own port and this app is
+         hit cross-origin on :5059 -- see environment.ts).
+
+         Link strips the leading "spa\" from each entry's relative path, then
+         puts it back. Without it, the SDK preserves the path relative to the
+         project file for files outside wwwroot inconsistently across globs, and
+         the bundle lands one directory deeper than Program.cs looks for it --
+         which presents as a 404 on every SPA route with no error anywhere. -->
+    <Content Include="spa\**\*" CopyToPublishDirectory="PreserveNewest" Link="spa\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Day 12: Dapper, for the hot read path only. EF Core stays the default
          for everything else; see Day12/docs for the rule this repo follows. -->
     <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.20.1" />
