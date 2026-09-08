@@ -150,8 +150,36 @@ try {
                   -QueryTimeout 300 `
                   -ErrorAction Stop | Out-Null
 } catch {
+    # Two very different faults, and the SQL client library reports them with
+    # messages that point at neither.
+    #
+    # "not allowed to access the server" names the client IP and is the honest
+    # one: the firewall refused this machine.
+    #
+    # "Named Pipes Provider, error: 40 - Could not open a connection" is the
+    # misleading one. Named Pipes is a LOCAL transport -- seeing it against an
+    # Azure SQL FQDN means the client never attempted TCP at all, usually
+    # because the server name did not resolve. It reads like a server-down
+    # problem and is really a name or connectivity problem. The same message
+    # appeared from `dotnet ef migrations remove`, where the cause was entirely
+    # different again: RemoveMigration calls GetAppliedMigrations() first, so it
+    # tried to reach the design-time factory's Server=(local).
     if ($_.Exception.Message -match 'not allowed to access the server') {
-        Die "The SQL firewall refused this machine. Re-run the deployment with `$env:SQL_CLIENT_IP set: `$env:SQL_CLIENT_IP = (Invoke-RestMethod https://api.ipify.org)"
+        Die ("The SQL firewall refused this machine. Its rules come from the TEMPLATE, not " +
+             "from `az sql server firewall-rule create` -- a hand-added rule would be invisible " +
+             "to the template and reported as drift by the idempotency check, or silently " +
+             "reverted by it. So set the variable and re-run the stack:`n" +
+             "  `$env:SQL_CLIENT_IP = (Invoke-RestMethod https://api.ipify.org)`n" +
+             "  az stack sub create -n quotes-dev -l uaenorth --template-file infra/main.bicep ``" +
+             "`n      --parameters infra/main.dev.bicepparam --action-on-unmanage deleteAll ``" +
+             "`n      --deny-settings-mode denyDelete --deny-settings-apply-to-child-scopes --yes`n" +
+             "A home IP address changes between sessions, so a rule added an hour ago may " +
+             "already name the wrong address.")
+    }
+    if ($_.Exception.Message -match 'Named Pipes Provider') {
+        Die ("The client never reached the server over TCP -- Named Pipes is a local transport, " +
+             "so this means '$SqlServerFqdn' did not resolve. Check the FQDN against " +
+             "`az stack sub show -n quotes-dev --query outputs.azurE_SQL_SERVER_FQDN.value -o tsv`.")
     }
     Die "Applying the script failed: $($_.Exception.Message)"
 }
