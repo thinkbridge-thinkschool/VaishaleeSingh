@@ -336,13 +336,47 @@ try {
     # idempotency check at the end starts reporting a spurious image change.
     azd env set SERVICE_QUOTES_API_RESOURCE_EXISTS true | Out-Null
 
-    # `azd deploy`, NOT `azd up`. The stack created above owns the
-    # infrastructure; `azd up` would create a SECOND stack over the same
-    # resources, and a stack claiming resources another stack manages is the
-    # most confusing failure mode in this whole exercise. azd here does one job:
-    # build the image and roll the app onto it.
-    Invoke-Checked 'azd deploy' { azd deploy --no-prompt }
-    Ok 'Image built and deployed.'
+    # ---- Push the image directly FIRST, then let azd do its pass -----------
+    #
+    # WHY BOTH, AND WHY THIS ORDER. `azd deploy` has a hard 1200-second timeout
+    # that is not configurable, and on a domestic uplink the FIRST push to a new
+    # registry does not fit inside it: the whole .NET base image goes up, not
+    # just the app layer. The observed failure was
+    #
+    #   ERROR: publishing service 'quotes-api' timed out after 1200 seconds
+    #
+    # after 21m26s, with no error from the build itself -- azd gives no progress
+    # output, so a slow push and a hung build look identical from outside.
+    #
+    # `dotnet publish /t:PublishContainer` does the same work with visible
+    # per-layer progress and no cap. It needs no Docker daemon: the .NET SDK
+    # pushes straight to the registry using the token `az acr login` wrote into
+    # the Docker config. The ACR admin account is not involved.
+    #
+    # Once those layers exist in the registry, a subsequent `azd deploy` only
+    # uploads the changed app layer and finishes well inside the timeout -- so
+    # azd remains the deployment mechanism this exercise is about rather than
+    # being replaced by a workaround. It runs second, and a failure there is a
+    # warning rather than fatal: the image is already pushed and step 10 rolls
+    # the app onto it either way.
+    $imageTag = "dev-$(Get-Date -Format 'yyyyMMddHHmmss')"
+    Invoke-Checked 'az acr login' { az acr login --name ($acrEndpoint.Split('.')[0]) }
+    Invoke-Checked 'dotnet publish container' {
+        dotnet publish QuotesApi/QuotesApi.csproj -c Release /t:PublishContainer `
+            -p:ContainerRegistry=$acrEndpoint `
+            -p:ContainerRepository=quotes-api `
+            -p:ContainerImageTag=$imageTag
+    }
+    Ok "Pushed $acrEndpoint/quotes-api:$imageTag"
+
+    azd deploy --no-prompt
+    if ($LASTEXITCODE -ne 0) {
+        Note 'azd deploy did not succeed, but the image above is already in the registry.'
+        Note 'Step 10 will roll the app onto it. Re-run azd deploy later if you want its'
+        Note 'own pass to go green -- the layers are cached now, so it will be much faster.'
+    } else {
+        Ok 'azd deploy succeeded.'
+    }
 
     # -----------------------------------------------------------------------
     Step 'The known packaging correction'
@@ -355,8 +389,14 @@ try {
     # This is exactly why denySettings.mode is denyDelete and not
     # denyWriteAndDelete: the stricter mode would refuse this write and the
     # deployment could never be corrected.
-    $tag = az acr repository show-tags --name ($acrEndpoint.Split('.')[0]) `
-        --repository quotes-api --orderby time_desc --top 1 -o tsv 2>$null
+    # Prefer the tag this run pushed. Falling back to "newest in the registry"
+    # is a guess, and it is the wrong guess if azd pushed under a different
+    # repository path -- which is the packaging bug described above.
+    $tag = $imageTag
+    if (-not $tag) {
+        $tag = az acr repository show-tags --name ($acrEndpoint.Split('.')[0]) `
+            --repository quotes-api --orderby time_desc --top 1 -o tsv 2>$null
+    }
     if ($tag) {
         Invoke-Checked 'containerapp update' {
             az containerapp update --name $ContainerApp --resource-group $ResourceGroup `
