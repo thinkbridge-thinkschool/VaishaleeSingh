@@ -154,10 +154,19 @@ if ($usage) {
     }
 }
 
+# Microsoft.Compute is here only so `az vm list-usage` above can answer. It is
+# NOT needed by the template -- Container Apps Consumption does not create VMs,
+# and it does not draw on the VM core quota either. The quota that actually
+# binds the API is the Container Apps one, and it cannot be read until an
+# environment exists:
+#
+#   az containerapp env list-usages -n <env> -g <rg> -o table
+#
+# Run that after the first deployment and before trusting prod's replica ceiling.
 foreach ($ns in @(
     'Microsoft.App', 'Microsoft.OperationalInsights', 'Microsoft.ServiceBus',
     'Microsoft.Sql', 'Microsoft.ContainerRegistry', 'Microsoft.ManagedIdentity',
-    'Microsoft.Insights', 'Microsoft.Web')) {
+    'Microsoft.Insights', 'Microsoft.Web', 'Microsoft.Compute')) {
     $state = az provider show --namespace $ns --query registrationState -o tsv 2>$null
     if ($state -eq 'Registered') {
         Write-Pass "$ns registered"
@@ -190,8 +199,19 @@ switch ("$allowed") {
         $script:findings['oidc_path'] = 'B - user-assigned managed identity'
     }
     default {
-        Write-Warn "Could not read the authorization policy (returned '$allowed'). Assume path B and confirm by trying 'az ad app create --display-name probe-delete-me'."
-        $script:findings['oidc_path'] = 'unknown - assume B'
+        Write-Warn "Microsoft Graph returned nothing for defaultUserRolePermissions (got '$allowed')."
+        Write-Host '    That is what a directory looks like when it withholds Graph reads from'
+        Write-Host '    ordinary members -- not an error in this script, and not evidence either'
+        Write-Host '    way about whether you may register applications. Settle it with one'
+        Write-Host '    directory WRITE, which this script deliberately does not perform for you:'
+        Write-Host ''
+        Write-Host '      az ad app create --display-name probe-delete-me' -ForegroundColor Gray
+        Write-Host '      az ad app delete --id <appId from above>' -ForegroundColor Gray
+        Write-Host ''
+        Write-Host '    Succeeds -> OIDC path A. Refused -> path B (user-assigned managed'
+        Write-Host '    identity with a federated credential), which needs no directory rights.'
+        Write-Host '    The same answer decides whether prod can have a GROUP as SQL admin.'
+        $script:findings['oidc_path'] = 'unknown - probe with az ad app create'
     }
 }
 

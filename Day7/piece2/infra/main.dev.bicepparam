@@ -53,17 +53,13 @@ param environmentType = 'dev'
 param resourceGroupName = 'thinkschool-dev-rg'
 param apiContainerAppName = 'quotes-api-dev'
 
-// REPLACE BEFORE DEPLOYING — gate G1 in
-// Day24/docs/day24-deployment-stacks-azd-migration-plan.md.
-//
-// Not defaulted to centralindia, and that is the point. Azure for Students
-// subscriptions carry an "allowed resource deployment regions" Azure Policy
-// whose contents vary per subscription, and centralindia is not guaranteed to
-// be in this one's. A wrong region here fails as a policy denial, which reads
-// like a permissions problem rather than a location one. Day24/scripts/
-// 00-preflight.ps1 probes it with a throwaway resource group; whatever survives
-// that probe is the value that belongs here.
-param location = 'REPLACE-WITH-G1-REGION'
+// MEASURED, not assumed. This subscription does carry an "Allowed resource
+// deployment regions" policy assignment — 00-preflight.ps1 found it — and
+// centralindia survived the throwaway-resource-group probe on 2026-09-08.
+// That probe is the only thing that proves a region is permitted rather than
+// merely plausible: a refused region reports as a policy denial, which reads
+// like a permissions problem rather than a location one.
+param location = 'centralindia'
 
 // The signing key is read from the environment at compile time, never written
 // into this file.
@@ -148,8 +144,11 @@ param apiConcurrentRequests = 50
 // wrong object ID here does not fail the deployment — it succeeds and leaves a
 // server NOBODY CAN ADMINISTER, and the only fix is to redeploy the server.
 // Placeholders that fail are better than plausible values that succeed.
-param sqlEntraAdminObjectId = 'REPLACE-WITH-G5-OBJECT-ID'
-param sqlEntraAdminLogin = 'REPLACE-WITH-G5-USER-PRINCIPAL-NAME'
+// From `az ad signed-in-user show` in the Amity tenant. Note the UPN is an
+// ordinary member identity (@s.amity.edu), not the #EXT# guest form Day 23
+// used — that one belongs to the old tenant and does not exist here.
+param sqlEntraAdminObjectId = 'a59d00a8-a829-49b4-83d1-952727eea166'
+param sqlEntraAdminLogin = 'vaishalee.singh@s.amity.edu'
 param sqlEntraAdminPrincipalType = 'User'
 
 param sqlDatabaseName = 'quotes'

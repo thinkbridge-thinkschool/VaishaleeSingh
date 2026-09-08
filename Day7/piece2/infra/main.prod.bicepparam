@@ -56,14 +56,27 @@ param environmentType = 'prod'
 param resourceGroupName = 'thinkschool-prod-rg'
 param apiContainerAppName = 'quotes-api-prod'
 
-// REPLACE BEFORE DEPLOYING — gate G1.
+// centralindia, the same region as dev — and that is a decision with a
+// consequence, not a copy.
 //
-// If the region policy on this subscription allows more than one region, use a
-// SECOND one here, different from dev's: createContainerAppsEnvironment is true
-// in both files, and a one-environment-per-region limit would otherwise block
-// prod outright. If only one region is allowed, dev must be torn down first, or
-// prod's environment cannot be created — check before starting, not after.
-param location = 'REPLACE-WITH-G1-PROD-REGION'
+// Only centralindia has been PROVEN permitted (00-preflight.ps1, 2026-09-08).
+// The subscription carries an "Allowed resource deployment regions" policy
+// whose full allowed set has not been read; a second region may well be
+// available and would be better. To find out:
+//
+//   az policy assignment list --query "[?displayName=='Allowed resource deployment regions'].parameters" -o json
+//
+// Because createContainerAppsEnvironment is true in both files, two environments
+// would land in one region. The old subscription enforced one Container Apps
+// Environment per region; whether this one does is UNMEASURED. If the prod
+// deployment fails with MaxNumberOfRegionalEnvironmentsInSubExceeded, there are
+// exactly two ways forward and guessing between them wastes a deployment:
+//
+//   1. Put prod in a second permitted region (preferred — find one above).
+//   2. Tear the dev stack down first, deploy prod, verify, tear prod down, then
+//      recreate dev. Sound only because prod is torn down anyway (see the header)
+//      and because the stack makes both teardowns clean.
+param location = 'centralindia'
 
 // Same mechanism as dev, read from JWT_SECRET at compile time. USE A DIFFERENT
 // KEY FROM DEV: sharing one means a dev-issued token is valid in production.
@@ -87,10 +100,26 @@ param createContainerAppsEnvironment = true
 
 // --- API ------------------------------------------------------------------
 // CHANGED ON DAY 24. Day 23 specified maxReplicas 10 at 1.0 vCPU — a ten-vCPU
-// ceiling. Azure for Students enforces a regional core quota around four, and
-// that limit does not fail at deploy time: minReplicas 2 fits comfortably, so
-// the deployment goes green and the failure waits until scale-out, under the
-// only load that would ever have justified running prod at all.
+// ceiling.
+//
+// The primary reason for cutting it is COST, and it is worth being exact about
+// that rather than hiding behind a quota. minReplicas 2 at 1.0 vCPU is two
+// always-on vCPU billed continuously; at 0.5 it is one. On a fixed $100 credit
+// that difference is months of runway.
+//
+// The secondary reason is quota, and it is UNVERIFIED — stated as such because
+// the distinction matters. Azure for Students publishes a regional core limit
+// around four, but that is a Microsoft.Compute VM quota and Container Apps
+// Consumption does not draw on it; it has its own per-region limit.
+// 00-preflight.ps1 could not read either (Microsoft.Compute is not registered
+// on this subscription, so `az vm list-usage` returned nothing). Measure the
+// one that actually applies once the environment exists:
+//
+//   az containerapp env list-usages -n <env> -g <rg> -o table
+//
+// If a quota does bind, it does not fail at deploy time: minReplicas 2 fits
+// comfortably, the deployment goes green, and the failure waits until
+// scale-out — under the only load that would ever have justified running prod.
 //
 // 4 x 0.5 vCPU keeps the ceiling inside the quota. minReplicas stays at 2 —
 // one replica means every deployment and every node recycle is downtime, and it
@@ -153,6 +182,36 @@ param sqlZoneRedundant = false
 // If group creation is blocked in that tenant — university tenants often
 // restrict it — fall back to the G5 user with principalType 'User' and record
 // that as a stated deviation. Do not ship zeros.
+// STILL A PLACEHOLDER, and the reason is now specific rather than pending.
+// 00-preflight.ps1 could not read the tenant's authorization policy at all —
+// Microsoft Graph returned nothing for defaultUserRolePermissions, which is what
+// a directory that withholds Graph reads from ordinary members looks like. So
+// whether `az ad group create` is permitted here is unknown, and a university
+// tenant commonly forbids it.
+//
+// Settle it with one command before touching this line:
+//
+//   az ad group create --display-name quotes-sql-admins --mail-nickname quotes-sql-admins
+//
+// If it succeeds — use the group, which is the right shape: a production
+// database whose only administrator is one named individual loses its
+// administrator when that person changes role.
+//
+//   az ad group member add --group quotes-sql-admins --member-id (az ad signed-in-user show --query id -o tsv)
+//   az ad group show --group quotes-sql-admins --query id -o tsv
+//
+// If it is refused — fall back to the same user dev uses, and switch
+// principalType to 'User':
+//
+//   param sqlEntraAdminObjectId = 'a59d00a8-a829-49b4-83d1-952727eea166'
+//   param sqlEntraAdminLogin = 'vaishalee.singh@s.amity.edu'
+//   param sqlEntraAdminPrincipalType = 'User'
+//
+// That is a real weakening of the production design, forced by a directory
+// this project does not control. Record it as a stated deviation in the
+// submission. Do not ship zeros either way — an unresolvable object ID is
+// rejected at deploy time, which is the one honest thing about the Day 23
+// placeholder and the reason it is not simply carried forward.
 param sqlEntraAdminObjectId = 'REPLACE-WITH-PROD-ADMIN-GROUP-OBJECT-ID'
 param sqlEntraAdminLogin = 'quotes-sql-admins'
 param sqlEntraAdminPrincipalType = 'Group'
