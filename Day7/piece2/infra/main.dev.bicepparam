@@ -258,9 +258,11 @@ param webContainerAppName = 'quotes-web-dev'
 // environment, where there is no container app to read an image from." I wrote
 // that after the API hit it, then set the front end's copy to true anyway.
 //
-// FLIP THIS TO TRUE once quotes-web-dev exists and has a real image. Left at
-// false, every infrastructure-only stack update reverts the front end to the
-// aci-helloworld placeholder -- which is the other half of the same trap.
-param webAppExists = false
+// NOW TRUE: quotes-web-dev exists and runs a real image, so
+// modules/fetch-container-image.bicep reads the running image rather than
+// overwriting it. Left at false, every infrastructure-only stack update would
+// revert the front end to the aci-helloworld placeholder -- the other half of
+// the same trap, and the half the API actually fell into.
+param webAppExists = true
 param webMinReplicas = 0
 param webMaxReplicas = 2
