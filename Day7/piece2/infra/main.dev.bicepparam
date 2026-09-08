@@ -243,6 +243,24 @@ param serviceBusLockDuration = 'PT1M'
 // header of modules/web.bicep for why this is not a Static Web App and not
 // bundled into the API image.
 param webContainerAppName = 'quotes-web-dev'
-param webAppExists = true
+// FALSE UNTIL THE APP EXISTS, then true. This shipped as `true` on the first
+// attempt and failed the whole stack deployment:
+//
+//   ResourceDeploymentFailure ... target: .../deployments/fetchLatestWebImage
+//
+// modules/fetch-container-image.bicep references an EXISTING container app to
+// read the image it is currently running. With exists = true and no such app,
+// that reference cannot resolve and the deployment fails -- taking every other
+// resource in the stack update down with it, since the modules deploy as one.
+//
+// The irony is that the note on quotesApiExists, six lines up, says exactly
+// this: "MUST BE FALSE FOR THE VERY FIRST DEPLOYMENT into a brand-new
+// environment, where there is no container app to read an image from." I wrote
+// that after the API hit it, then set the front end's copy to true anyway.
+//
+// FLIP THIS TO TRUE once quotes-web-dev exists and has a real image. Left at
+// false, every infrastructure-only stack update reverts the front end to the
+// aci-helloworld placeholder -- which is the other half of the same trap.
+param webAppExists = false
 param webMinReplicas = 0
 param webMaxReplicas = 2
