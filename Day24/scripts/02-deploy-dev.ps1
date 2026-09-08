@@ -190,11 +190,20 @@ try {
     $env:SQL_CLIENT_IP = (Invoke-RestMethod https://api.ipify.org).Trim()
     Ok "This machine will be allowed through the SQL firewall."
 
+    # --deny-settings-excluded-actions is the CLI half of the excludedActions
+    # list in azure.yaml, and it is NOT optional. Without it the stack's own
+    # deny assignment blocks the stack's own deletion of the previous
+    # SQL_CLIENT_IP firewall rule, and every later update reports `failed` with
+    # DenyAssignmentAuthorizationFailed while an orphan rule accumulates. See
+    # the long comment in azure.yaml.
     Invoke-Checked 'stack create' {
         az stack sub create --name $StackName --location $Location `
             --template-file infra/main.bicep --parameters infra/main.dev.bicepparam `
             --action-on-unmanage deleteAll --deny-settings-mode denyDelete `
             --deny-settings-apply-to-child-scopes `
+            --deny-settings-excluded-actions `
+                'Microsoft.Resources/subscriptions/resourceGroups/delete' `
+                'Microsoft.Sql/servers/firewallRules/delete' `
             --description 'QuotesApi dev - Day 24' --yes -o none
     }
     Ok 'Stack created.'

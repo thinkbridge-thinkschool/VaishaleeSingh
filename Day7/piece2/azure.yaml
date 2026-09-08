@@ -67,6 +67,34 @@ infra:
         # portal delete of a single resource is still refused.
         - Microsoft.Resources/subscriptions/resourceGroups/delete
 
+        # ADDED AFTER THE STACK BLOCKED ITS OWN HOUSEKEEPING. This is the most
+        # surprising thing Day 24 turned up and it is worth stating exactly.
+        #
+        # The SQL firewall rule for the operator's machine comes from
+        # sqlAllowedClientIpAddresses, which reads SQL_CLIENT_IP. A home IP
+        # changes, so the next deployment names a different rule and the old one
+        # leaves the template. actionOnUnmanage.resources is `delete`, so the
+        # stack correctly moved to remove it -- and then failed:
+        #
+        #   DenyAssignmentAuthorizationFailed: The client '<user>' has permission
+        #   to perform action 'Microsoft.Sql/servers/firewallRules/delete' ...
+        #   however, the access is denied because of the deny assignment ...
+        #   created by Deployment Stack '.../quotes-dev'
+        #
+        # The stack's own deny assignment refused the stack's own cleanup. The
+        # unmanage delete executes in the CALLER's security context, and
+        # applyToChildScopes: true extends denyDelete to every child of the SQL
+        # server -- firewall rules included. Nothing is misconfigured; two
+        # correct settings simply compose into a deadlock, and the stack reports
+        # `failed` on every subsequent update while the orphan rule sits there.
+        #
+        # Excluding this one action rather than setting applyToChildScopes to
+        # false: that flag protects the database and everything else under the
+        # server, and trading all of it away to let one ephemeral rule rotate
+        # would be the wrong side of the bargain. A firewall rule is the one
+        # child resource this template deliberately churns.
+        - Microsoft.Sql/servers/firewallRules/delete
+
       # excludedPrincipals: FILLED IN AT PHASE E, deliberately left out until
       # then. It takes the OBJECT ID of the GitHub Actions OIDC principal — on
       # this subscription most likely a user-assigned managed identity rather
