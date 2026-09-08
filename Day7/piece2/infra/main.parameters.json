@@ -11,6 +11,15 @@
     "environmentType": {
       "value": "${AZURE_ENVIRONMENT_TYPE=dev}"
     },
+    "resourceGroupName": {
+      "value": "${AZURE_RESOURCE_GROUP_NAME}"
+    },
+    "apiContainerAppName": {
+      "value": "${AZURE_API_CONTAINER_APP_NAME}"
+    },
+    "createContainerAppsEnvironment": {
+      "value": "${AZURE_CREATE_CAE=true}"
+    },
     "quotesApiExists": {
       "value": "${SERVICE_QUOTES_API_RESOURCE_EXISTS=false}"
     },

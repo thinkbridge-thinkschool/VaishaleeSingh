@@ -42,11 +42,18 @@ concurrency:
   group: api-deploy-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# Day 24: every one of these was a literal naming a resource in subscription
+# 80d20ef9-8bfa-45d7-a9d8-b6cf1f0c791e, whose credits are exhausted. They are
+# repository VARIABLES rather than secrets -- a registry hostname and a resource
+# group name are identifiers, not credentials, and putting them in Settings >
+# Variables means moving subscription again is a settings change rather than a
+# commit. Set them from the deployment stack's outputs; see
+# Day24/docs/day24-deployment-stacks-azd-migration-plan.md, Phase E.
 env:
-  REGISTRY: crqn4pdkxclsa6s.azurecr.io
+  REGISTRY: ${{ vars.AZURE_CONTAINER_REGISTRY_ENDPOINT }}
   IMAGE: quotes-api
-  RESOURCE_GROUP: thinkschool-rg
-  CONTAINER_APP: quotes-api-azd
+  RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+  CONTAINER_APP: ${{ vars.AZURE_CONTAINER_APP }}
 
 # OIDC federated credentials, not a stored service-principal secret. The whole
 # point of Day 17 is that a deployment does not need a password sitting
@@ -175,7 +182,7 @@ jobs:
       # could.
       - name: Smoke-test the API through the Static Web App
         env:
-          SWA_ORIGIN: https://yellow-river-074adb50f.7.azurestaticapps.net
+          SWA_ORIGIN: ${{ vars.SWA_ORIGIN }}
         run: |
           set -euo pipefail
           for attempt in $(seq 1 10); do

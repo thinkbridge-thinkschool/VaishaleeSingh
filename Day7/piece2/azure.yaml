@@ -1,4 +1,85 @@
+# Day 24 — azd, driving an Azure Deployment Stack.
+#
+# WHAT CHANGED FROM DAY 23. This file used to be four lines: a name and one
+# service. The `infra.deploymentStacks` block below is the Day 24 deliverable —
+# it makes `azd up` provision into a deployment STACK rather than as a loose
+# subscription deployment, which buys two things Day 23 did not have:
+#
+#   * Teardown is clean. A stack knows every resource it created, so removing a
+#     resource from the template deletes it on the next update instead of
+#     leaving an orphan nobody remembers provisioning — and `azd down` removes
+#     the whole set rather than whatever the operator remembers to select.
+#   * Drift is detectable. The stack is a managed set, so a change made in the
+#     portal shows up as a difference against the template rather than
+#     surviving quietly until the next deploy silently reverts it.
+#
+# REQUIRES AN ALPHA FEATURE, OFF BY DEFAULT:
+#
+#   azd config set alpha.deployment.stacks on
+#   azd config show          # confirm it is listed
+#
+# Without that, azd ignores this whole block and deploys the old way. It does
+# not warn. Microsoft documents the feature as becoming the default in a future
+# release; today it is opt-in and may change.
+#
+# ONE OWNER, NOT TWO. `az stack sub create` and `azd up` will both try to claim
+# these resources if you run both, and a stack claiming resources another stack
+# already manages is the most confusing failure in this exercise. Pick one:
+#   azd owns it   -> use `azd up`; use `az stack sub validate` only for checks.
+#   the CLI owns it -> use `az stack sub create`, then `azd deploy` (never `up`).
+
 name: quotes-api
+
+infra:
+  provider: bicep
+  path: infra
+
+  deploymentStacks:
+    actionOnUnmanage:
+      # deleteAll, not detach. Detach is the safer-sounding option and it is the
+      # one that produces orphans: a resource dropped from the template stops
+      # being managed but keeps existing and keeps billing, which on a student
+      # subscription is exactly how the credit disappears. Delete is what makes
+      # "remove it from the template" mean something.
+      resources: delete
+      resourceGroups: delete
+
+    denySettings:
+      # denyDelete, NOT denyWriteAndDelete — and this is a considered choice,
+      # not the weaker default.
+      #
+      # denyWriteAndDelete would block `az containerapp update --image ...`,
+      # which this deployment still needs on every rollout: QuotesApi.csproj
+      # pins ContainerRepository to `quotes-api` while azd computes a different
+      # path, so the container app needs one corrective update after each
+      # `azd deploy`. It would also block the day17-api-deploy workflow, whose
+      # entire job is rolling the app onto a new image.
+      #
+      # Deletion is the hazard a stack exists to prevent. A write to a resource
+      # the template already owns is not — the next stack update reconciles it,
+      # and Day 24's drift check is what surfaces it.
+      mode: denyDelete
+      applyToChildScopes: true
+
+      excludedActions:
+        # `azd down` and a deliberate `az stack sub delete` both need this.
+        # Excluding it keeps intentional teardown working while an accidental
+        # portal delete of a single resource is still refused.
+        - Microsoft.Resources/subscriptions/resourceGroups/delete
+
+      # excludedPrincipals: FILLED IN AT PHASE E, deliberately left out until
+      # then. It takes the OBJECT ID of the GitHub Actions OIDC principal — on
+      # this subscription most likely a user-assigned managed identity rather
+      # than an app registration, because a university tenant commonly blocks
+      # non-admin app registration (see the plan, gate G3).
+      #
+      # It is commented out rather than stubbed with a placeholder GUID: ARM
+      # rejects an unresolvable principal, so a stub would fail every
+      # deployment until Phase E rather than only the pipeline it protects.
+      #
+      # excludedPrincipals:
+      #   - <object id of id-github-oidc>
+
 services:
   quotes-api:
     project: ./QuotesApi/QuotesApi.csproj

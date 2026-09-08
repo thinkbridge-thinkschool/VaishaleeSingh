@@ -46,3 +46,15 @@ Day17/api-bff/deploy.zip
 # day22-api-resilience-lines.txt, which is committed.
 Day22/verification/day22-api-stdout.log
 Day22/verification/day22-api-stderr.log
+
+# azd environment state. azd writes its own .azure/.gitignore containing '*',
+# so this is belt-and-braces rather than the only guard -- but that nested file
+# is azd's to rewrite, and infra/main.bicep's output comments assume .azure is
+# NOT ignored here (which is why no connection string is emitted as a template
+# output). Making it true at the root as well costs one line.
+.azure/
+
+# The Claude desktop app mirrors delivered files into this folder inside the
+# connected workspace. They are duplicates of files that already live at their
+# real paths; committing them would give every deliverable two homes that drift.
+Claude outputs/
