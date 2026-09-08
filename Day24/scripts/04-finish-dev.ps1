@@ -150,8 +150,17 @@ $rules | ForEach-Object { Write-Host "  $($_.name)  $($_.startIpAddress)" }
 # refused before the exclusion existed; if any survive, delete them explicitly.
 # That is finishing the stack's own instruction, not editing infrastructure
 # behind the template's back -- the rule is not in the template any more.
+# Two kinds of rule are NOT in the template and should go: a client-<ip> rule
+# from a previous SQL_CLIENT_IP, and QueryEditorClientIPAddress_<epoch>, which
+# the Azure portal's Query editor creates silently the first time you open it.
+# The second is textbook drift -- a resource added by hand, invisible to the
+# template, which the stack will delete on its next update anyway. Removing it
+# here keeps the firewall describable by the template rather than by whoever
+# last used the portal.
 $expected = "client-$($env:SQL_CLIENT_IP -replace '\.','-')"
-$orphans  = @($rules | Where-Object { $_.name -like 'client-*' -and $_.name -ne $expected })
+$orphans  = @($rules | Where-Object {
+    ($_.name -like 'client-*' -or $_.name -like 'QueryEditorClientIPAddress_*') -and $_.name -ne $expected
+})
 foreach ($o in $orphans) {
     Note "Deleting orphan rule $($o.name) (not in the template)."
     az sql server firewall-rule delete --name $o.name --server $SqlServer -g $ResourceGroup -o none
@@ -179,25 +188,56 @@ if ($current -eq $wanted) {
 # ---------------------------------------------------------------------------
 Step 'Wait for a healthy revision'
 # ---------------------------------------------------------------------------
+# ScaledToZero IS A HEALTHY STATE, and treating it as a pending one wasted five
+# polling attempts and then crashed. minReplicas is 0 in the template, so with
+# no traffic the revision sits at ScaledToZero indefinitely -- it will never
+# reach Running on its own, because the thing that wakes it is a request, and
+# the requests are in the smoke tests further down. Waiting for Running before
+# probing is waiting for an event that only probing can cause.
+#
+# The az call is also allowed to fail outright. It did:
+#   ConnectionResetError(10054, 'An existing connection was forcibly closed')
+# a transient TLS reset from ARM. az printed a full Python traceback and
+# returned nothing, ConvertFrom-Json produced $null, and $rev.name threw
+# "The property 'name' cannot be found on this object" under Set-StrictMode --
+# so a network blip presented as a script bug. Retried rather than fatal.
 $ready = $false
 foreach ($i in 1..30) {
-    $rev = az containerapp revision list -n $ContainerApp -g $ResourceGroup `
-        --query "[?properties.active] | [0].{name:name,state:properties.runningState}" -o json | ConvertFrom-Json
-    Write-Host "  attempt $i : $($rev.name) = $($rev.state)"
-    if ($rev.state -eq 'Running') { $ready = $true; break }
-    if ($rev.state -in 'Failed','Degraded','ActivationFailed') {
+    $revJson = az containerapp revision list -n $ContainerApp -g $ResourceGroup `
+        --query "[?properties.active] | [0].{name:name,state:properties.runningState}" -o json 2>$null
+    $rev = $null
+    if (-not [string]::IsNullOrWhiteSpace($revJson)) {
+        try { $rev = $revJson | ConvertFrom-Json } catch { $rev = $null }
+    }
+    if ($null -eq $rev) {
+        Write-Host "  attempt $i : could not read revision state (transient ARM error), retrying"
+        Start-Sleep -Seconds 10
+        continue
+    }
+
+    $state = if ($rev.PSObject.Properties.Name -contains 'state') { [string]$rev.state } else { '' }
+    Write-Host "  attempt $i : $($rev.name) = $state"
+
+    if ($state -in 'Running','ScaledToZero') {
+        $ready = $true
+        if ($state -eq 'ScaledToZero') {
+            Note 'Scaled to zero, which is correct with minReplicas 0. The first probe will wake it.'
+        }
+        break
+    }
+    if ($state -in 'Failed','Degraded','ActivationFailed') {
         Bad "Revision reported $($rev.state)."
         # The console log is the only place the cause appears, and a crashed
         # replica is gone by the time you look -- so read it from Log Analytics.
         Note 'Read the crash output with:'
         Note "  `$ws = az monitor log-analytics workspace show -g $ResourceGroup -n log7mo4cimyk4vnk --query customerId -o tsv"
         Note "  az monitor log-analytics query --workspace `$ws --analytics-query `"ContainerAppConsoleLogs_CL | where RevisionName_s == '$($rev.name)' | project TimeGenerated, Log_s | order by TimeGenerated asc | take 60`" -o table"
-        $failures += "revision $($rev.state)"
+        $failures += "revision $state"
         break
     }
     Start-Sleep -Seconds 10
 }
-if ($ready) { Ok 'Revision running.' }
+if ($ready) { Ok 'Revision is in a serviceable state.' }
 
 # ---------------------------------------------------------------------------
 Step 'Smoke tests'
