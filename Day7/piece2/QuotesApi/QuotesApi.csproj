@@ -115,8 +115,27 @@
          SDK's placement of content files from outside wwwroot is inconsistent
          across globs, and the bundle can land a directory deeper than
          Program.cs looks for it – which presents as a 404 on every SPA route,
-         with nothing logged anywhere. -->
-    <Content Include="spa\**\*" CopyToPublishDirectory="PreserveNewest" Link="spa\%(RecursiveDir)%(Filename)%(Extension)" />
+         with nothing logged anywhere.
+
+         THE Exclude IS NOT OPTIONAL, and leaving it out cost a deploy. The Web
+         SDK's implicit Content items already include every **/*.json under the
+         project directory, so a bare glob over spa/ claims
+         spa/staticwebapp.config.json a second time and the build fails with:
+
+           error NETSDK1022: Duplicate 'Content' items were included ...
+           The duplicate items were: 'spa\staticwebapp.config.json'
+
+         The advice in that message is to set EnableDefaultContentItems=false,
+         which would be the wrong fix here: it would drop appsettings.json and
+         every other file the SDK is right to include, to solve a collision on
+         one file. Excluding .json from this glob leaves those files to the
+         implicit rule, which publishes them at the same relative path under
+         spa/ anyway – so the bundle is complete either way.
+
+         Angular emits .json for the SWA config today and could emit more
+         (locale data, a web manifest); the exclude is a pattern rather than a
+         filename so those are covered too. -->
+    <Content Include="spa\**\*" Exclude="spa\**\*.json" CopyToPublishDirectory="PreserveNewest" Link="spa\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>
