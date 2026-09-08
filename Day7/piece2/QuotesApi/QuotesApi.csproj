@@ -94,21 +94,28 @@
          See the "Angular front end" block in Program.cs for why it is served
          from here rather than from Azure Static Web Apps.
 
+         PUNCTUATION NOTE, because this cost a build: an XML comment may not
+         contain two consecutive hyphens anywhere. The first version of this
+         block used them as sentence dashes and MSBuild rejected the entire
+         project with MSB4025 before restoring a single package. Every other
+         comment in this file uses single hyphens; that was not an accident to
+         copy over. En dashes below.
+
          The glob matches nothing when spa/ is absent, which is the normal case
-         locally and in ci.yml -- only the deploy workflow builds into it. That
+         locally and in ci.yml – only the deploy workflow builds into it. That
          is deliberate: an empty glob is silent, whereas an SDK item pointing at
-         a required-but-missing directory fails the build.
+         a required directory that does not exist fails the build.
 
          CopyToPublishDirectory rather than CopyToOutputDirectory: these files
          are needed in the published image, not in bin/ during `dotnet run`
          (where the SPA is served by `ng serve` on its own port and this app is
-         hit cross-origin on :5059 -- see environment.ts).
+         hit cross-origin on :5059 – see environment.ts).
 
-         Link strips the leading "spa\" from each entry's relative path, then
-         puts it back. Without it, the SDK preserves the path relative to the
-         project file for files outside wwwroot inconsistently across globs, and
-         the bundle lands one directory deeper than Program.cs looks for it --
-         which presents as a 404 on every SPA route with no error anywhere. -->
+         Link restates each entry's path under spa/ explicitly. Without it the
+         SDK's placement of content files from outside wwwroot is inconsistent
+         across globs, and the bundle can land a directory deeper than
+         Program.cs looks for it – which presents as a 404 on every SPA route,
+         with nothing logged anywhere. -->
     <Content Include="spa\**\*" CopyToPublishDirectory="PreserveNewest" Link="spa\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
