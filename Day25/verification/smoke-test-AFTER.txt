@@ -31,3 +31,18 @@ establishes both halves of the identity story at once:
 Service Bus is not exercised by a health probe and is not claimed here. Its
 evidence is the namespace's disableLocalAuth plus the two data-plane role
 assignments, both asserted in no-secrets-AFTER.txt.
+
+FRONT END
+---------
+curl.exe -s -o NUL -w "web %{http_code}" https://quotes-web-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io/
+
+web 200
+
+Checked separately because the front end is a second container app with its own
+image, and the Day 25 changes reached it in ways easy to overlook: the registry
+admin user it had never used was disabled, and the stack redeployed it twice.
+It holds no secrets of its own (asserted in no-secrets-AFTER.txt), pulls from
+the registry with the same managed identity as the API, and takes API_BASE_URL
+as plain configuration -- so a 200 here confirms the identity-only pull still
+works, which is the one thing disabling the admin user could plausibly have
+broken.
