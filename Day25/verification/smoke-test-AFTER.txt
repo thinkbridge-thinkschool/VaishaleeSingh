@@ -28,9 +28,8 @@ establishes both halves of the identity story at once:
     azureADOnlyAuthentication, so there is no password path that could have
     produced this result: 3.59ms of Healthy is a token being accepted.
 
-Service Bus is not exercised by a health probe and is not claimed here. Its
-evidence is the namespace's disableLocalAuth plus the two data-plane role
-assignments, both asserted in no-secrets-AFTER.txt.
+Service Bus was not exercised by the health probe, so it was not claimed here
+at first -- the container logs below settle it directly.
 
 FRONT END
 ---------
@@ -46,3 +45,49 @@ the registry with the same managed identity as the API, and takes API_BASE_URL
 as plain configuration -- so a 200 here confirms the identity-only pull still
 works, which is the one thing disabling the admin user could plausibly have
 broken.
+
+SERVICE BUS AND THE IDENTITY SELECTION, FROM THE CONTAINER'S OWN LOG
+--------------------------------------------------------------------
+az containerapp logs show -n quotes-api-dev -g thinkschool-dev-rg --tail 100
+
+  Managed Identity source selected: AppService with ID:
+      ClientId d9d18fa7-d4cf-4432-98b5-f1d2f544104a
+  ManagedIdentityCredential.GetToken succeeded.
+      Scopes: [ https://servicebus.azure.net/.default ]
+  DefaultAzureCredential credential selected: Azure.Identity.ManagedIdentityCredential
+  Receive link created for Identifier:
+      quote-events/Subscriptions/search-index-...-Receiver
+  Receive link created for Identifier:
+      quote-events/Subscriptions/audit-...-Receiver
+  ReceiveBatchAsync done. Received '0' messages.
+
+Two claims, both settled by that.
+
+AZURE_CLIENT_ID IS DOING ITS JOB. The credential names client id
+d9d18fa7-..., which is id-quotes-api-7mo4cimyk4vnk, rather than picking by
+precedence. Before Day 25 that variable was unset and resolution worked only
+because exactly one identity happened to be attached.
+
+SERVICE BUS AUTHENTICATES BY IDENTITY. A token for servicebus.azure.net was
+issued and AMQP receive links were then established on both subscriptions of a
+namespace whose disableLocalAuth is true. A SAS connection string could not
+have produced this, because the namespace rejects them. "Received 0 messages"
+is the correct result for an idle topic and is not a failure.
+
+APPLICATION INSIGHTS -- OPEN AT TIME OF WRITING
+------------------------------------------------
+A token for https://monitor.azure.com/ is acquired successfully, and no 401 or
+403 appears in the log. But a successful TOKEN IS NOT PROOF THE INGESTION ROLE
+WORKS, and it is worth being exact about why: Entra issues an access token to
+any authenticated principal regardless of what that principal is authorised to
+do. RBAC is enforced at the ingestion endpoint, one HTTP call later, and a
+missing Monitoring Metrics Publisher grant would surface there as a 403 -- not
+at token acquisition.
+
+The first queries returned 0 rows, taken within roughly two minutes of the
+requests being made, which is inside normal App Insights ingestion latency
+(typically 3-5 minutes). Unresolved rather than failed: re-query after five
+minutes, and grep the container log for 403 to distinguish the two.
+
+Nothing else in Day 25 depends on the answer. Telemetry export is the only
+thing affected, and no claim in the submission rests on it.
