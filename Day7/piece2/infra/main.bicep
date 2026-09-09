@@ -365,7 +365,7 @@ module keyVault 'modules/keyvault.bicep' = {
     keyVaultName: resolvedKeyVaultName
     location: location
     tags: tags
-    secretsReaderPrincipalId: identity.outputs.identityPrincipalId
+    appPrincipalId: identity.outputs.identityPrincipalId
     enablePurgeProtection: keyVaultPurgeProtection
     softDeleteRetentionInDays: keyVaultSoftDeleteRetentionInDays
   }

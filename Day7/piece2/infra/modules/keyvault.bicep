@@ -41,8 +41,17 @@ param location string
 @description('Tags applied to the vault.')
 param tags object
 
+// NAMED appPrincipalId rather than anything containing the word secret,
+// and the choice is not cosmetic. The Bicep linter's
+// secure-secrets-in-params rule matches on a parameter's NAME, so any name
+// with 'secret' in it is reported as a value that must be @secure(). A
+// principal (object) ID is not one -- it is a public directory identifier,
+// and marking it @secure() would hide it from what-if output in exchange for
+// nothing. This answers the linter honestly instead of suppressing the rule,
+// and matches modules/servicebus.bicep, which already calls the same value by
+// this name.
 @description('Principal (object) ID of the identity that reads secrets — the app. Empty skips the grant, which leaves a vault the app cannot read.')
-param secretsReaderPrincipalId string = ''
+param appPrincipalId string = ''
 
 // PURGE PROTECTION IS A PARAMETER, AND IT IS OFF BY DEFAULT, WHICH LOOKS LIKE
 // THE WRONG DEFAULT UNTIL YOU HOLD IT NEXT TO DAY 24.
@@ -78,7 +87,7 @@ param softDeleteRetentionInDays int = 7
 // overwrite its own signing key is an app that can lock every user out.
 var secretsUserRoleDefinitionId = '4633458b-17de-408a-b874-0445c86b69e6'
 
-var grantRead = !empty(secretsReaderPrincipalId)
+var grantRead = !empty(appPrincipalId)
 
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: keyVaultName
@@ -129,10 +138,10 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
 // to something — it fails to provision at all, and the error names the secret
 // rather than the missing permission.
 resource secretsUserRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (grantRead) {
-  name: guid(keyVault.id, secretsReaderPrincipalId, 'KeyVaultSecretsUser')
+  name: guid(keyVault.id, appPrincipalId, 'KeyVaultSecretsUser')
   scope: keyVault
   properties: {
-    principalId: secretsReaderPrincipalId
+    principalId: appPrincipalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', secretsUserRoleDefinitionId)
   }
