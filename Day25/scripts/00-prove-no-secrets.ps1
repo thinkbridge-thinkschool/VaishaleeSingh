@@ -373,7 +373,7 @@ if ($null -eq $vaults -or @($vaults).Count -eq 0) {
         # it cannot reuse.
         $purge = (Test-HasProperty $vault.properties 'enablePurgeProtection') -and $vault.properties.enablePurgeProtection
         Add-Result -Area 'Key Vault' -Check ("{0}: purge protection = {1}" -f $v.name, $purge) -Status 'INFO' `
-                   -Detail 'Wanted in prod. In dev it collides with the stack teardown -- see the Day 25 approach doc.'
+                   -Detail 'Wanted in prod. In dev it collides with the stack teardown -- see Day25/docs/day25-submission.md.'
     }
 }
 
