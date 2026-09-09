@@ -234,28 +234,41 @@ The API already ran two authentication schemes side by side — `CustomJwt` for
 its own tokens and `EntraId`, routed per request by an `AddPolicyScheme` that
 inspects the `aud` claim. That much predates this day and is deployed.
 
-**Not yet applied, and stated as such.** The Entra registration still points at
-tenant `f774bb68-…` and app `91566dbd-…` — the *old* subscription's directory.
-Token validation is an HTTPS call to an authority URL and has no relationship
-to which tenant owns the subscription, so it works; it is still wrong to leave,
-because it makes a directory nobody is paying for a permanent runtime
-dependency while every other identity here lives in Amity.
-`Day25/scripts/02-entra-app-registrations.ps1` is written and reviewed — an API
-registration exposing `api://<appId>/access` plus a public-client SPA
-registration using PKCE, **zero client secrets** between them — but it has not
-been run, so `main.dev.bicepparam` still carries the old values. Claiming
-otherwise would be easy and unverifiable, which is precisely why it is called
-out here.
+Day 25 moved the registration into the tenant that owns the subscription.
+`Day25/scripts/02-entra-app-registrations.ps1` created both, in Amity
+(`8d46a076-…`):
 
-Writing it surfaced a real bug regardless. `azureAdAudience` is
-`api://quotes-api/access`, which is a *scope*, not an audience: Entra issues
-tokens whose `aud` is the resource's Application ID URI, with the scope carried
-separately in `scp`. The `EntraId` scheme would therefore fail audience
-validation on **every** genuine Entra token it was handed. Nothing caught it
-because nothing has sent one — the SPA signs in against the app's own
-`CustomJwt` endpoints, so the second scheme has never been exercised in anger.
-A dead code path is not a correct one. The script emits the right value; the
-fix lands when it runs.
+```
+API   18920fc7-79a5-42f0-bf65-c101749dd79b   api://18920fc7-…/access
+SPA   e2255607-dc83-4747-9623-b73cc24ff62c   public client, PKCE, redirect to the dev web app
+```
+
+**Two registrations, zero client secrets.** A browser cannot keep a secret, so
+the SPA is a public client using authorization code with PKCE; the API is a
+resource server that validates tokens and never requests them, so it has no
+credential either. Nothing in this phase adds anything for the proof script to
+find — which is why it is re-run afterwards rather than assumed.
+
+It previously pointed at tenant `f774bb68-…` and app `91566dbd-…`, in the old
+subscription's directory. That worked — validating a token is an HTTPS call to
+an authority URL and has no relationship to which tenant owns the subscription
+— and that is precisely why it survived a subscription migration unnoticed,
+leaving a directory nobody pays for as a runtime dependency.
+
+**The move exposed a bug that was always there.** `azureAdAudience` was
+`api://quotes-api/access`, which is a *scope*, not an audience. Entra issues
+access tokens whose `aud` claim is the resource's Application ID URI, carrying
+the scope separately in `scp` — so the `EntraId` scheme would have rejected
+**every** genuine Entra token it was handed. Nothing caught it because nothing
+had sent one: the SPA signs in against the app's own `CustomJwt` endpoints, so
+the second scheme has never been exercised in anger. A dead code path is not a
+correct one. The script wrote `api://18920fc7-…` in its place.
+
+The script writes those three values into `main.dev.bicepparam` itself rather
+than printing them to copy. Three hand-transcribed GUIDs is three chances to
+transpose a character, and every one of those mistakes fails identically — as
+an audience or issuer mismatch, which reads like a broken auth scheme rather
+than a typo.
 
 **Deliberately deferred:** retiring `CustomJwt` entirely. That is the fix that
 would delete the signing key rather than vault it, and it means migrating the

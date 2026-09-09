@@ -131,26 +131,40 @@ param keyVaultPurgeProtection = false
 param keyVaultSoftDeleteRetentionInDays = 7
 
 // --- Entra ID ------------------------------------------------------------
-// STILL THE OLD TENANT, AND THE AUDIENCE BELOW IS WRONG. Both are fixed by
-// running Day25/scripts/02-entra-app-registrations.ps1, which registers the
-// API and a public-client SPA in the Amity tenant and then rewrites the three
-// lines below in place.
+// Registered in the Amity tenant on Day 25 by
+// Day25/scripts/02-entra-app-registrations.ps1, which also wrote the three
+// values below. Before that they named tenant f774bb68-… and app 91566dbd-…,
+// in the OLD subscription's directory — which worked, because validating a
+// token is an HTTPS call to an authority URL and has nothing to do with which
+// tenant owns the subscription, and that is exactly why it survived a
+// subscription migration unnoticed.
 //
-// This file used to record the audience as an open question: appsettings.json
-// declares AzureAd:Audience as 'api://quotes-api/access', while the app in the
-// old subscription used 'api://91566dbd-…', the app-ID-URI form, and they
-// cannot both be right. They are not. Entra issues an access token whose `aud`
-// claim is the RESOURCE'S APPLICATION ID URI — api://<appId> — and carries the
-// scope separately in `scp`. The value below is a scope, so the EntraId scheme
-// would reject every genuine Entra token handed to it.
+// AND THE AUDIENCE WAS WRONG THE WHOLE TIME. This file used to call it an open
+// question: appsettings.json declares 'api://quotes-api/access' while the old
+// app used the app-ID-URI form, and they cannot both be right. They are not.
+// Entra issues an access token whose `aud` claim is the RESOURCE'S APPLICATION
+// ID URI — api://<appId> — and carries the scope separately in `scp`. The old
+// value was a scope, so the EntraId scheme would have rejected every genuine
+// Entra token handed to it.
 //
-// Nothing has caught that because nothing has sent one: the SPA signs in
-// against the app's own CustomJwt endpoints, so the second scheme has never
-// been exercised. A dead code path is not a correct one.
+// Nothing caught it because nothing had sent one: the SPA signs in against the
+// app's own CustomJwt endpoints, so the second scheme has never been exercised
+// in anger. A dead code path is not a correct one.
 //
-// A token whose audience does not match is rejected outright, so getting this
-// wrong disables the Entra scheme rather than weakening it.
-param azureAdAudience = 'api://quotes-api/access'
+// These are directory identifiers, not secrets. A tenant id and a client id
+// identify an application publicly; neither registration has a client secret,
+// and neither needs one — the SPA is a public client using PKCE and the API
+// only ever validates tokens. The companion SPA registration is
+// e2255607-dc83-4747-9623-b73cc24ff62c, unused until the front end moves to
+// MSAL.
+param azureAdTenantId = '8d46a076-d093-416d-a57b-8692cde13bf8'
+param azureAdClientId = '18920fc7-79a5-42f0-bf65-c101749dd79b'
+
+// api://<appId>, the Application ID URI -- NOT the scope. Entra puts the
+// resource's app ID URI in the token's aud claim and carries the scope
+// separately in scp, so the previous value ('api://quotes-api/access') would
+// have failed audience validation on every genuine token.
+param azureAdAudience = 'api://18920fc7-79a5-42f0-bf65-c101749dd79b'
 
 // --- Observability -------------------------------------------------------
 // 30 days is the included, no-extra-cost retention. The 1 GB/day cap is a cost
