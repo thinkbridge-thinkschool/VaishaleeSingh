@@ -1,3 +1,4 @@
+using Azure.Identity;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
@@ -118,7 +119,32 @@ public static class ObservabilityExtensions
             // without it Serilog would swallow everything before it ever
             // reached this provider.
             openTelemetry.UseAzureMonitor(options =>
-                options.ConnectionString = appInsightsConnectionString);
+            {
+                options.ConnectionString = appInsightsConnectionString;
+
+                // Day 25. Authenticate ingestion with the app's managed
+                // identity instead of the instrumentation key embedded in the
+                // connection string.
+                //
+                // The component sets DisableLocalAuth (see
+                // infra/modules/monitoring.bicep), so the key no longer
+                // authenticates anything and this line is what keeps telemetry
+                // flowing at all. Without it the exporter is refused, and the
+                // symptom is not an exception — it is an empty Application
+                // Insights, which is a considerably worse thing to debug.
+                //
+                // WHICH identity this resolves to depends on AZURE_CLIENT_ID
+                // being set on the container app; main.bicep sets it, and the
+                // comment there explains why the two changes are really one.
+                //
+                // Unconditional inside this block on purpose. The block only
+                // runs when a connection string is configured, which is true
+                // in deployed environments and false in CI and the test suite,
+                // so nothing that runs without an Azure login reaches here. A
+                // developer pointing at this component from a laptop needs
+                // `az login`, which DefaultAzureCredential picks up.
+                options.Credential = new DefaultAzureCredential();
+            });
         }
 
         return services;

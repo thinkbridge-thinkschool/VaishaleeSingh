@@ -37,6 +37,17 @@ param retentionInDays int = 30
 @description('Daily ingestion cap in GB. -1 means uncapped. A cap DROPS data once hit — never set one in production.')
 param dailyQuotaGb int = -1
 
+@description('Principal (object) ID of the identity that publishes telemetry. Empty skips the grant — which, with disableLocalAuth below, means nothing can send telemetry at all, so it is empty only for a deployment that has no app yet.')
+param telemetryPublisherPrincipalId string = ''
+
+// Monitoring Metrics Publisher. A fixed, well-known role definition GUID — the
+// same in every tenant — and the role Application Insights requires for
+// ingestion once local auth is off. It covers traces and logs as well as the
+// name suggests metrics alone.
+var metricsPublisherRoleDefinitionId = '3913510d-42f4-4e42-8a64-420c390055eb'
+
+var grantPublish = !empty(telemetryPublisherPrincipalId)
+
 resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: logAnalyticsWorkspaceName
   location: location
@@ -70,6 +81,43 @@ resource applicationInsights 'Microsoft.Insights/components@2020-02-02' = {
     Application_Type: 'web'
     WorkspaceResourceId: logAnalyticsWorkspace.id
     IngestionMode: 'LogAnalytics'
+
+    // Day 25. THIS IS WHAT TURNS THE CONNECTION STRING FROM A CREDENTIAL INTO
+    // AN ADDRESS, and it is the whole reason the connection string may keep
+    // sitting in the container app's environment in plain sight.
+    //
+    // An Application Insights connection string carries
+    // InstrumentationKey=<guid>. With local auth enabled that key is a bearer
+    // credential: anyone holding it can write telemetry into this component
+    // from anywhere on the internet, with no identity and no audit trail, and
+    // poisoned telemetry is a genuinely nasty thing to debug because the
+    // graphs stay plausible. Off, ingestion requires an Entra token and the
+    // key is reduced to naming which component to talk to.
+    //
+    // Prefer this to putting the connection string in Key Vault. Vaulting it
+    // would store a working credential more carefully; this stops it being a
+    // credential.
+    //
+    // THE COST, STATED: an app that does not present a token stops being able
+    // to send telemetry the moment this flips, and it does not fail loudly —
+    // it fails as an absence of data. The app-side half is the Credential on
+    // UseAzureMonitor() in ObservabilityExtensions.cs, and that half depends
+    // in turn on AZURE_CLIENT_ID being set on the container app, because
+    // DefaultAzureCredential cannot otherwise tell which user-assigned
+    // identity to present. Those three changes are one change.
+    DisableLocalAuth: true
+  }
+}
+
+// Without this the app authenticates and is then refused, which surfaces as
+// silence in the telemetry rather than as an error anywhere useful.
+resource metricsPublisherRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (grantPublish) {
+  name: guid(applicationInsights.id, telemetryPublisherPrincipalId, 'MonitoringMetricsPublisher')
+  scope: applicationInsights
+  properties: {
+    principalId: telemetryPublisherPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', metricsPublisherRoleDefinitionId)
   }
 }
 

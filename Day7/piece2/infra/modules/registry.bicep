@@ -35,8 +35,8 @@ param tags object
 ])
 param skuName string = 'Basic'
 
-@description('Enable the admin user. Kept true for parity with the pre-Day-23 template; the app itself pulls with its managed identity and never uses it.')
-param adminUserEnabled bool = true
+@description('Enable the admin user. Day 25 flipped the default to false: the app pulls with its managed identity, so the admin username/password was a live credential pair that nothing depended on and nobody was watching. main.bicep passes it explicitly as well, so this default cannot quietly drift back.')
+param adminUserEnabled bool = false
 
 @description('Resource ID of the user-assigned identity that needs AcrPull. Empty skips the grant.')
 param pullIdentityResourceId string = ''

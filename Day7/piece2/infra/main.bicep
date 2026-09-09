@@ -315,6 +315,12 @@ module monitoring 'modules/monitoring.bicep' = {
     tags: tags
     retentionInDays: logRetentionInDays
     dailyQuotaGb: logDailyQuotaGb
+
+    // Day 25. Creates the Monitoring Metrics Publisher grant, which App
+    // Insights now requires because the module disables local auth. Passing an
+    // output from `identity` also makes Bicep order the two modules correctly,
+    // regardless of the fact that monitoring is declared first in this file.
+    telemetryPublisherPrincipalId: identity.outputs.identityPrincipalId
   }
 }
 
@@ -337,6 +343,11 @@ module registry 'modules/registry.bicep' = {
     tags: tags
     pullIdentityResourceId: identity.outputs.identityResourceId
     pullIdentityPrincipalId: identity.outputs.identityPrincipalId
+
+    // Day 25. False is also the module's default now; it is repeated here
+    // because a security property that depends on a default being left alone
+    // is one refactor away from being on again, and nothing would report it.
+    adminUserEnabled: false
   }
 }
 
@@ -407,6 +418,25 @@ var apiEnvironmentVariables = [
   {
     name: 'ASPNETCORE_ENVIRONMENT'
     value: 'Production'
+  }
+
+  // Day 25. NAMES WHICH IDENTITY DefaultAzureCredential SHOULD PRESENT, and it
+  // is load-bearing rather than tidy.
+  //
+  // A container app can carry several identities. DefaultAzureCredential is
+  // handed no hint about which one is meant, so with more than one attached it
+  // picks by its own precedence order and the wrong choice presents as an
+  // authorization failure that reads exactly like a missing role assignment.
+  // It resolved correctly until now only because exactly one identity happens
+  // to be attached — an accident, not a design.
+  //
+  // The SQL path never had this problem: the connection string names the
+  // identity itself, via User Id=<client id>. The Service Bus client, the
+  // Key Vault configuration provider and (as of Day 25) the Azure Monitor
+  // exporter all go through DefaultAzureCredential and had no such hint.
+  {
+    name: 'AZURE_CLIENT_ID'
+    value: identity.outputs.identityClientId
   }
   {
     name: 'Jwt__Issuer'

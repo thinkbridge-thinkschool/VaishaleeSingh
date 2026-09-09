@@ -174,15 +174,33 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host 'Container app secrets' -ForegroundColor Cyan
 
 foreach ($app in @($ApiContainerApp, $WebContainerApp)) {
-    $secrets = Invoke-AzJson @('containerapp', 'secret', 'list', '-n', $app, '-g', $ResourceGroup, '-o', 'json')
+    # Called directly rather than through Invoke-AzJson, because the two
+    # outcomes that matter here are indistinguishable after ConvertFrom-Json on
+    # Windows PowerShell 5.1: it turns the JSON literal `[]` into NOTHING, not
+    # into an empty array, so "this app has no secrets" and "this command
+    # failed" both arrive as $null.
+    #
+    # The baseline run reported quotes-web-dev as "app not found" for exactly
+    # that reason. It exists, and it holds no secrets -- which is the best
+    # possible result and was being printed as an inconclusive skip. A proof
+    # that cannot tell a pass from a missing resource is not a proof.
+    $rawSecrets = (& az containerapp secret list -n $app -g $ResourceGroup -o json 2>$null) -join "`n"
+    $azFailed = ($LASTEXITCODE -ne 0)
 
-    if ($null -eq $secrets) {
+    if ($azFailed) {
         Add-Result -Area $app -Check 'secret list' -Status 'SKIP' -Detail 'App not found, or no permission to read it.'
         continue
     }
 
-    if (@($secrets).Count -eq 0) {
+    if ([string]::IsNullOrWhiteSpace($rawSecrets) -or $rawSecrets.Trim() -eq '[]') {
         Add-Result -Area $app -Check 'holds no secrets at all' -Status 'PASS' -Detail 'Nothing to vault; nothing to leak.'
+        continue
+    }
+
+    $secrets = $null
+    try { $secrets = $rawSecrets | ConvertFrom-Json } catch { $secrets = $null }
+    if ($null -eq $secrets) {
+        Add-Result -Area $app -Check 'secret list' -Status 'SKIP' -Detail 'Could not parse the secret list.'
         continue
     }
 
