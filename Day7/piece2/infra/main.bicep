@@ -58,28 +58,40 @@ param quotesApiImageName string = ''
 // Secrets — supplied at deploy time, never from a parameter file
 // ---------------------------------------------------------------------------
 
-// NO @minLength HERE, AND THAT IS DELIBERATE — it is not an oversight to fix.
+// ---------------------------------------------------------------------------
+// Key Vault — Day 25
+// ---------------------------------------------------------------------------
+// THE jwtSecret PARAMETER USED TO BE HERE. It is gone, and its absence is the
+// deliverable.
 //
-// Bicep validates length constraints on a .bicepparam assignment at COMPILE
-// time (BCP333). With @minLength(32) on this parameter, the parameter files'
-// `readEnvironmentVariable('JWT_SECRET', '')` fallback cannot compile at all
-// for anyone who has not exported the variable — which is everyone who merely
-// opens the file. Both stricter spellings were tried and both fail the same
-// way: the one-argument form raises BCP427, the empty fallback raises BCP333.
+// It was @secure(), which is often read as "handled safely". The narrower
+// truth is that @secure() keeps the value out of deployment LOGS while doing
+// nothing about the places it has to exist in order to be passed at all: the
+// operator's shell and azd .env, the CI runner's environment, and the body of
+// the request to the ARM deployment API. Four copies of a value that needs to
+// exist in one place.
 //
-// The constraint therefore lives on modules/api.bicep's own jwtSecret
-// parameter, which is where the value is actually consumed. This parameter is a
-// pass-through, and Bicep cannot statically prove the length of a value that
-// arrives through one, so the check happens at DEPLOYMENT: ARM validates the
-// module's parameter and rejects an empty key before a single resource is
-// touched. Same guarantee, moved from "cannot open the file" to "cannot deploy
-// without the key" — which is the boundary that actually matters.
-//
-// HMAC-SHA256 needs a 256-bit key, and QuotesApi's JwtOptions.MinLength(32)
-// rejects anything shorter at startup regardless.
-@description('JWT signing key. NEITHER parameter file carries a value: the parameter files read it from JWT_SECRET, and azd reads it from the same variable via main.parameters.json. Minimum length is enforced by modules/api.bicep and by the app at startup.')
-@secure()
-param jwtSecret string
+// Now the vault holds it, Day25/scripts/01-seed-jwt-secret.ps1 puts it there
+// directly, and this template only ever handles the URI. The long comment that
+// used to live here — about @minLength(32) on a pass-through parameter failing
+// to compile with BCP333 — went with the parameter. That whole problem was an
+// artefact of passing the value through the template, and it stopped existing
+// when the value did.
+// EMPTY DEFAULT, RESOLVED BELOW, and not a stylistic choice: a parameter
+// default cannot reference a variable in Bicep, and the resource token is one.
+// Writing the obvious `= '${abbreviations.keyVault}-${resourceToken}'` here
+// does not compile.
+@description('Name of the key vault. Leave empty to derive it from the resource token, which is what keeps it globally unique. Vault names are 3-24 characters, alphanumerics and hyphens.')
+param keyVaultName string = ''
+
+@description('Block early purge of a soft-deleted vault. FALSE in dev, because the deployment stack tears vaults down and a reserved name blocks the next create for up to 90 days. TRUE in prod. See modules/keyvault.bicep.')
+param keyVaultPurgeProtection bool = false
+
+@description('Days a soft-deleted vault stays recoverable. 7 in dev, 90 in prod.')
+param keyVaultSoftDeleteRetentionInDays int = 7
+
+@description('Name of the secret holding the JWT signing key, inside the vault.')
+param jwtSecretName string = 'jwt-secret'
 
 @description('JWT issuer.')
 param jwtIssuer string = 'https://yourapp.com'
@@ -290,6 +302,10 @@ param serviceBusLockDuration string = 'PT1M'
 var abbreviations = loadJsonContent('./abbreviations.json')
 var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
 
+// Day 25. 'kv-' plus a 13-character token is 16 characters, inside Key Vault's
+// 24-character ceiling with room to spare.
+var resolvedKeyVaultName = empty(keyVaultName) ? '${abbreviations.keyVault}-${resourceToken}' : keyVaultName
+
 var tags = {
   'azd-env-name': environmentName
   'environment-type': environmentType
@@ -331,6 +347,27 @@ module identity 'modules/identity.bicep' = {
     managedIdentityName: '${abbreviations.managedIdentity}-quotes-api-${resourceToken}'
     location: location
     tags: tags
+  }
+}
+
+// The vault is created EMPTY. Nothing here writes a secret into it, because a
+// template that can write the value is a template that has to be given the
+// value. Day25/scripts/01-seed-jwt-secret.ps1 fills it.
+//
+// Consequence worth stating: on a brand-new environment the API's revision
+// cannot provision until that script has run, because its Key Vault reference
+// resolves at revision creation. Deploy, seed, redeploy — in that order, once,
+// per environment.
+module keyVault 'modules/keyvault.bicep' = {
+  name: 'keyVault'
+  scope: rg
+  params: {
+    keyVaultName: resolvedKeyVaultName
+    location: location
+    tags: tags
+    secretsReaderPrincipalId: identity.outputs.identityPrincipalId
+    enablePurgeProtection: keyVaultPurgeProtection
+    softDeleteRetentionInDays: keyVaultSoftDeleteRetentionInDays
   }
 }
 
@@ -545,7 +582,13 @@ module api 'modules/api.bicep' = {
     memory: apiMemory
     concurrentRequests: apiConcurrentRequests
     env: apiEnvironmentVariables
-    jwtSecret: jwtSecret
+
+    // Depending on this module OUTPUT is what orders the deployment: the
+    // container app is not created until the vault and its role assignment
+    // are. Ordering is not the same as effectiveness, though — RBAC needs a
+    // little time to propagate, so a first deployment may still need one
+    // retry. See the note on the secrets block in modules/api.bicep.
+    jwtSecretUri: '${keyVault.outputs.keyVaultUri}secrets/${jwtSecretName}'
   }
 }
 

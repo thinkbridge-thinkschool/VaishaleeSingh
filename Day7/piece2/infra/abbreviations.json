@@ -3,8 +3,9 @@
   "containerApps": "ca",
   "containerAppsEnvironment": "cae",
   "containerRegistry": "cr",
+  "keyVault": "kv",
   "logAnalyticsWorkspace": "log",
   "managedIdentity": "id",
-  "sqlServer": "sql",
-  "serviceBusNamespace": "sb"
+  "serviceBusNamespace": "sb",
+  "sqlServer": "sql"
 }

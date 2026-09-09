@@ -91,13 +91,27 @@ param quotesApiExists = false
 // Also mature, unlike the two Southeast Asian alternatives.
 param location = 'koreacentral'
 
-// Same mechanism as dev, read from JWT_SECRET at compile time. USE A DIFFERENT
-// KEY FROM DEV: sharing one means a dev-issued token is valid in production.
+// --- Key Vault -----------------------------------------------------------
+// This file used to say: "A production signing key belongs in a vault, and the
+// follow-up this file implies is a Key Vault module with a secretRef —
+// deliberately out of scope, still out of scope, and still worth stating."
+// Day 25 is that follow-up. The parameter is gone; the vault holds the key.
 //
-// A production signing key belongs in a vault, and the follow-up this file
-// implies is a Key Vault module with a secretRef — deliberately out of scope,
-// still out of scope, and still worth stating.
-param jwtSecret = readEnvironmentVariable('JWT_SECRET', '')
+// STILL TRUE, AND NOW ENFORCED BY SEPARATION RATHER THAN BY DISCIPLINE: prod
+// must not share dev's key, because a shared key makes a dev-issued token
+// valid in production. Each environment has its own vault, named from its own
+// resource token, so there is no longer a shared JWT_SECRET variable that
+// could be reused by accident — the wrong key is now something you would have
+// to go and copy on purpose.
+//
+// Purge protection ON, opposite to dev, and this is the environment the
+// feature exists for: it means a soft-deleted vault cannot be purged early,
+// so destroying the secrets and their audit trail together stops being
+// possible. It also means the vault's name is reserved for the full retention
+// window if this stack is ever torn down — which is the correct trade in
+// production and the wrong one in dev.
+param keyVaultPurgeProtection = true
+param keyVaultSoftDeleteRetentionInDays = 90
 
 // --- Observability -------------------------------------------------------
 // 90 days, and NO daily cap. A quota that is hit drops telemetry, which means

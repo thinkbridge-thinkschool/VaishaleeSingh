@@ -70,10 +70,13 @@ param concurrentRequests int = 50
 @description('Non-secret environment variables, composed by main.bicep. Each entry is { name, value }.')
 param env array = []
 
-@description('JWT signing key. Supplied at deploy time — no parameter file carries a value for it. JwtOptions rejects anything under 32 characters at startup.')
-@secure()
-@minLength(32)
-param jwtSecret string
+// Day 25 replaced a @secure() jwtSecret parameter with this one. The old
+// parameter meant the signing key travelled from the operator's environment,
+// through a parameter file, through the ARM deployment API, into this
+// resource — four places holding a value that only ever needed to be in one.
+// Now the template carries an ADDRESS and the value stays in the vault.
+@description('Full URI of the JWT signing key secret, e.g. https://kv-x.vault.azure.net/secrets/jwt-secret. An address, not a value: reaching it still needs a token this template never issues. Empty falls back to no secret at all, which the app refuses to start without.')
+param jwtSecretUri string
 
 var jwtSecretName = 'jwt-secret'
 
@@ -95,10 +98,31 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
         targetPort: targetPort
         transport: 'auto'
       }
+      // A KEY VAULT REFERENCE, NOT A VALUE.
+      //
+      // `identity` names which of the app's identities fetches the secret, and
+      // it is required: without it the platform has nothing to authenticate
+      // with and the reference cannot resolve. That identity needs Key Vault
+      // Secrets User on the vault, which modules/keyvault.bicep grants.
+      //
+      // TWO THINGS ABOUT HOW THIS RESOLVES, both of which look like bugs the
+      // first time they happen:
+      //
+      //   * It resolves when a REVISION IS CREATED, not per request. Rotating
+      //     the secret in the vault therefore does not reach a running app —
+      //     the revision keeps what it read at start-up. Rotation is a
+      //     deployment, or at minimum a revision restart.
+      //   * If it cannot resolve — secret missing, role assignment not yet
+      //     propagated — the revision FAILS TO PROVISION. It does not start
+      //     degraded and it does not fall back. Expect the first deployment
+      //     after the grant to need a retry: RBAC takes roughly 30 seconds to
+      //     take effect, and Bicep's dependency ordering guarantees the
+      //     assignment is CREATED first, not that it is EFFECTIVE first.
       secrets: [
         {
           name: jwtSecretName
-          value: jwtSecret
+          keyVaultUrl: jwtSecretUri
+          identity: userAssignedIdentityResourceId
         }
       ]
       registries: [

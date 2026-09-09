@@ -107,31 +107,28 @@ param quotesApiExists = true
 // indiasouthcentral is permitted by policy but offers no Container Apps at all.
 param location = 'uaenorth'
 
-// The signing key is read from the environment at compile time, never written
-// into this file.
+// --- Key Vault -----------------------------------------------------------
+// THE SIGNING KEY IS NO LONGER HERE, AND NOTHING REPLACED IT.
 //
-// The empty-string fallback is deliberate, and it is not a default value: it
-// exists so this file compiles for someone who has merely OPENED it. Two
-// stricter spellings were tried first and both fail at compile time rather
-// than at deploy time:
-//   readEnvironmentVariable('JWT_SECRET')      -> BCP427 when the var is unset
-//   ... with @minLength(32) on the parameter   -> BCP333, because Bicep checks
-//                                                 length here, not at deploy
+// This file used to carry `param jwtSecret = readEnvironmentVariable(...)`,
+// with a long comment about why the empty-string fallback had to exist for the
+// file to compile at all. All of that was scaffolding around one decision:
+// that the value would travel through the template. Day 25 reversed that
+// decision, so the scaffolding went with it.
 //
-// Empty is still not deployable. modules/api.bicep declares @minLength(32) on
-// the parameter that actually consumes this, and ARM validates that at
-// deployment — so a deploy without JWT_SECRET set is rejected before a single
-// resource is touched. Fail at deploy, not at open.
+// The value now goes operator -> vault, once, via
+// Day25/scripts/01-seed-jwt-secret.ps1. Nothing in this repository ever holds
+// it, JWT_SECRET no longer needs to be exported to deploy, and it should be
+// removed from the azd environment (.azure/thinkschool-dev/.env), where it is
+// currently sitting in plain text.
 //
-// It cannot be passed as `-p jwtSecret=...` alongside this file: az refuses to
-// mix a .bicepparam with inline parameter overrides. Set the variable instead:
-//   $env:JWT_SECRET = '<at least 32 characters>'
-//
-// USE A NEW KEY. Not the literal that is still in this repository's git
-// history, and not the one the old subscription's app was issuing tokens with —
-// a subscription cutover is the right moment to invalidate every outstanding
-// token rather than carry them across.
-param jwtSecret = readEnvironmentVariable('JWT_SECRET', '')
+// Purge protection OFF here. Not an oversight and not laziness: this stack is
+// torn down and recreated, actionOnUnmanage is deleteAll, and a purge-protected
+// vault reserves its name for up to 90 days after deletion — so leaving it on
+// would make the NEXT deployment fail on a name it cannot reuse, reported as a
+// conflict rather than as anything mentioning purge protection.
+param keyVaultPurgeProtection = false
+param keyVaultSoftDeleteRetentionInDays = 7
 
 // --- Entra ID ------------------------------------------------------------
 // Unchanged, and pointing at the OLD tenant — see the header. Still unresolved
