@@ -26,6 +26,12 @@ on:
       # that fixed CrossCuttingTests silently did not re-run the deploy that
       # the test failure had blocked, which is the gate quietly not gating.
       - 'Day7/piece2/**'
+      # Day13/quotes-web is deliberately NOT here. The front end is its own
+      # container app with its own image and its own workflow
+      # (day24-web-deploy.yml) -- the separation this project had on the
+      # previous subscription, restored. An Angular change must not rebuild
+      # and redeploy the API, and a broken bundle must not be able to block an
+      # API deployment.
       - '.github/workflows/day17-api-deploy.yml'
   workflow_dispatch:
 
@@ -42,11 +48,18 @@ concurrency:
   group: api-deploy-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# Day 24: every one of these was a literal naming a resource in subscription
+# 80d20ef9-8bfa-45d7-a9d8-b6cf1f0c791e, whose credits are exhausted. They are
+# repository VARIABLES rather than secrets -- a registry hostname and a resource
+# group name are identifiers, not credentials, and putting them in Settings >
+# Variables means moving subscription again is a settings change rather than a
+# commit. Set them from the deployment stack's outputs; see
+# Day24/docs/day24-deployment-stacks-azd-migration-plan.md, Phase E.
 env:
-  REGISTRY: crqn4pdkxclsa6s.azurecr.io
+  REGISTRY: ${{ vars.AZURE_CONTAINER_REGISTRY_ENDPOINT }}
   IMAGE: quotes-api
-  RESOURCE_GROUP: thinkschool-rg
-  CONTAINER_APP: quotes-api-azd
+  RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+  CONTAINER_APP: ${{ vars.AZURE_CONTAINER_APP }}
 
 # OIDC federated credentials, not a stored service-principal secret. The whole
 # point of Day 17 is that a deployment does not need a password sitting
@@ -155,37 +168,61 @@ jobs:
           exit 1
 
       # The last thing that can still be wrong once the container is up: the
-      # app is listening, but the path from the browser to it is broken. So the
-      # check goes through the front door -- the Static Web App -- rather than
-      # straight at the Container App.
+      # app is listening, but what it serves is not what a browser needs.
       #
-      # Hitting the Container App's own FQDN does not work and should not: it
-      # has Container Apps authentication enabled with the Static Web App as its
-      # linked identity provider, so unauthenticated traffic is answered with
-      # 401 before it ever reaches the container. That is the point of the
-      # linked backend -- the API is not meant to be callable from the internet
-      # -- and an earlier version of this step curled it directly and read that
-      # 401 as a failure. It was measuring the security control working.
+      # DAY 24 REWROTE THIS STEP, AND THE OLD VERSION IS WORTH RECORDING.
+      # It probed through the Static Web App and deliberately did NOT hit the
+      # Container App's own FQDN, because the container had Container Apps
+      # authentication enabled with the SWA as its linked identity provider --
+      # so unauthenticated traffic was answered 401 before reaching the app.
+      # An earlier revision curled it directly and read that 401 as a failure;
+      # it was measuring the security control working.
       #
-      # POST /api/auth/login with an empty body is the probe because it is
-      # anonymous, side-effect free, and its 400 body is unmistakably this API's
-      # own: AuthEndpointExtensions returns a validation problem naming the
-      # "credentials" key. A 200 from the SPA shell would not contain it, so
-      # this cannot pass on the SWA's fallback page the way a status-only check
-      # could.
-      - name: Smoke-test the API through the Static Web App
-        env:
-          SWA_ORIGIN: https://yellow-river-074adb50f.7.azurestaticapps.net
+      # That topology is gone. Static Web Apps is not offered in any region this
+      # subscription's policy permits, so the container serves the SPA itself and
+      # its ingress is external by design. The 401 boundary no longer exists --
+      # which is a real reduction, not a simplification: the API is now
+      # internet-reachable and defends itself with its own authentication rather
+      # than sitting behind a front door. It is recorded as a stated deviation in
+      # Day24/docs, not quietly dropped.
+      #
+      # Two probes, because there are now two things being served and they fail
+      # independently -- a working API behind a missing bundle looks fine to a
+      # status check and shows a blank page to a user.
+      - name: Smoke-test the API and the SPA
         run: |
           set -euo pipefail
+          fqdn=$(az containerapp show --name "$CONTAINER_APP" --resource-group "$RESOURCE_GROUP" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          origin="https://$fqdn"
+          echo "Probing $origin"
+
+          # 1. The API. POST /api/auth/login with an empty body is the probe
+          # because it is anonymous, side-effect free, and its 400 body is
+          # unmistakably this API's own: AuthEndpointExtensions returns a
+          # validation problem naming the "credentials" key. Critically, this
+          # cannot pass on the SPA shell -- which is exactly the failure the
+          # regex in Program.cs's MapFallbackToFile exists to prevent, so this
+          # probe is also the test for that regex.
+          api_ok=false
           for attempt in $(seq 1 10); do
-            body=$(curl -s --max-time 15 -X POST "$SWA_ORIGIN/api/auth/login" \
+            body=$(curl -s --max-time 15 -X POST "$origin/api/auth/login" \
               -H 'Content-Type: application/json' -d '{"email":"","password":""}' || true)
-            echo "attempt $attempt: $(printf '%.200s' "$body")"
+            echo "api attempt $attempt: $(printf '%.200s' "$body")"
             case "$body" in
-              *credentials*) echo "The API answered through the SWA."; exit 0 ;;
+              *credentials*) api_ok=true; break ;;
+              *"<!doctype"*|*"<!DOCTYPE"*)
+                echo "::error::/api/auth/login returned the SPA shell. The MapFallbackToFile regex is not excluding api/ -- an API 404 is being served as HTML with a 200."
+                exit 1 ;;
             esac
             sleep 10
           done
-          echo "::error::The API did not answer through $SWA_ORIGIN within 100s."
-          exit 1
+          [ "$api_ok" = true ] || { echo "::error::The API did not answer at $origin within 100s."; exit 1; }
+          echo "The API answered."
+
+          # The SPA probes that used to live here have moved to
+          # day24-web-deploy.yml, along with the bundle itself. This workflow
+          # asserts the API and nothing else -- which is the point of the
+          # split: a front-end regression must not turn an API deployment red,
+          # and an API smoke test that also checked HTML would do exactly that.
+          echo "API smoke test passed."

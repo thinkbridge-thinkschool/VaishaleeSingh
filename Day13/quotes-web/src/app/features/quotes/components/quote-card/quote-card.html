@@ -8,11 +8,21 @@
     "
     [style.view-transition-name]="'quote-image-' + quote().id"
   >
-    <button
-      type="button"
+    <!--
+      A ROUTER LINK, not a button that opens a modal. Clicking a quote now
+      navigates to /quotes/:id -- the same destination the separate expand
+      icon used to be the only way to reach. That icon is gone: two controls
+      on one card that both meant "look at this quote", one opening a modal
+      and one navigating, is a choice the reader should not have to make.
+
+      The View Transition on quote-image-<id> relies on this being a real
+      navigation, which it now is for the whole card rather than for one
+      small target in the corner.
+    -->
+    <a
       class="quote__open"
-      [attr.aria-label]="'Open and edit quote by ' + quote().author"
-      (click)="openRequested.emit(quote())"
+      [routerLink]="['/quotes', quote().id]"
+      [attr.aria-label]="'Open the quote by ' + quote().author"
     >
       <!--
         A real <blockquote> with a <cite>: this is a quotation, and the elements
@@ -28,127 +38,10 @@
           <app-badge tone="primary">yours</app-badge>
         }
       </div>
-    </button>
+    </a>
 
     <footer class="quote__footer">
-      <!--
-        The one place in this card that is a REAL router navigation rather than
-        the modal preview above. quote-detail-page is its own route (lazy-loaded,
-        :id param) and the View Transition between the two relies on this being
-        an actual navigation, not another click on the modal-opening button.
-      -->
-      <a
-        class="quote__open-full"
-        [routerLink]="['/quotes', quote().id]"
-        [attr.aria-label]="'Open the full page for the quote by ' + quote().author"
-      >
-        <!-- Expand/maximize glyph, same inline-SVG pattern as the theme toggle. -->
-        <svg
-          class="quote__open-full-icon"
-          viewBox="0 0 24 24"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-          aria-hidden="true"
-        >
-          <path
-            d="M9 3H3v6M15 3h6v6M9 21H3v-6M15 21h6v-6"
-            stroke="currentColor"
-            stroke-width="1.8"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-        </svg>
-      </a>
 
-      <!--
-        Day 16 (state management, signals first): add this quote to one of the
-        caller's collections. Backed by CollectionPicker -- a plain injectable
-        with signals, not a CollectionDetailStore-shaped class -- see its own
-        header comment for why. One shared instance for the whole page (see
-        QuotesPage's providers) is what makes only-one-menu-open-at-once true
-        without this component tracking its siblings.
-      -->
-      <div class="quote__collect">
-        <button
-          #collectToggle
-          type="button"
-          class="quote__collect-toggle"
-          [class.quote__collect-toggle--open]="picker.isOpenFor(quote().id)"
-          [attr.aria-expanded]="picker.isOpenFor(quote().id)"
-          [attr.aria-label]="'Add the quote by ' + quote().author + ' to a collection'"
-          (click)="togglePicker()"
-        >
-          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <path
-              d="M12 5v14M5 12h14"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
-        </button>
-
-        <!--
-          Always present (a closed [popover] is display:none by default, per
-          spec), not @if-gated -- #collectMenu needs a stable element for the
-          constructor's effect to call .showPopover()/.hidePopover() on. See
-          quote-card.ts for why this is a [popover] div, not a plain div, and
-          not a <dialog> either (non-modal <dialog>.show() does NOT escape an
-          ancestor's overflow: hidden -- only top-layer promotion does, and
-          only .showModal() gets that; the Popover API gets the same top-layer
-          promotion without dragging in modal/backdrop/focus-trap behaviour).
-        -->
-        <div
-          #collectMenu
-          popover="auto"
-          class="quote__collect-menu"
-          [attr.aria-label]="'Collections for the quote by ' + quote().author"
-        >
-            @if (picker.isLoadingCollections()) {
-              <p class="quote__collect-status">Loading your collections…</p>
-            } @else if (picker.collectionsError(); as failure) {
-              <p class="quote__collect-status quote__collect-status--error">{{ failure.message }}</p>
-              <button type="button" class="quote__collect-retry" (click)="retryLoadCollections()">
-                Retry
-              </button>
-            } @else if (picker.collections(); as collections) {
-              @if (collections.length === 0) {
-                <p class="quote__collect-status">
-                  You don't have any collections yet. Create one from the Collections page.
-                </p>
-              } @else {
-                <ul class="quote__collect-list">
-                  @for (collection of collections; track collection.id) {
-                    <li>
-                      <button
-                        type="button"
-                        class="quote__collect-item"
-                        [disabled]="picker.isAdding(quote().id, collection.id) || collection.quoteCount >= 50"
-                        (click)="addToCollection(collection.id)"
-                      >
-                        <span class="quote__collect-item-name">{{ collection.name }}</span>
-                        <span class="quote__collect-item-count">
-                          @if (picker.isAdding(quote().id, collection.id)) {
-                            Adding…
-                          } @else if (collection.quoteCount >= 50) {
-                            Full
-                          } @else {
-                            {{ collection.quoteCount }}/50
-                          }
-                        </span>
-                      </button>
-                    </li>
-                  }
-                </ul>
-              }
-            }
-
-            @if (picker.addError(); as addFailure) {
-              <p class="quote__collect-status quote__collect-status--error">{{ addFailure.message }}</p>
-            }
-        </div>
-      </div>
 
       @if (deletable()) {
         <app-button

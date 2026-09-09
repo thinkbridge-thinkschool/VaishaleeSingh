@@ -120,6 +120,23 @@ app.UseMiddleware<ExceptionHandlingMiddleware>();
 // Backend-owned static assets (quote backgrounds) served from wwwroot.
 app.UseStaticFiles();
 
+
+// UseRouting EXPLICITLY, AFTER the static file middleware. Keep it here.
+//
+// Day 24 spent an afternoon on this. StaticFileMiddleware does not serve a
+// file once routing has selected an endpoint, and WebApplication PREPENDS its
+// own UseRouting when you never call one -- so with a catch-all route in the
+// table, routing matched every request before static files ran and wwwroot
+// stopped being served at all. Assets came back as 200 with
+// Content-Type: text/html and nothing was logged anywhere.
+//
+// The catch-all that caused it is gone (the front end is its own container
+// app now), so nothing currently depends on this line. It stays because the
+// next person to add a fallback route would otherwise reintroduce the same
+// failure, and because static files before routing is the order you want
+// regardless.
+app.UseRouting();
+
 // Applies any pending EF Core migrations on startup, so the database schema
 // is always up to date before the app starts accepting requests.
 //
@@ -148,11 +165,92 @@ app.UseStaticFiles();
 // CREATE TABLE over them. Such a database has to be baselined (or dropped
 // and recreated) before the first deploy that carries this change --
 // Day19/verification/day19-evidence-runbook.md has the baseline script.
+//
+// DAY 24 CORRECTION, AND IT CONTRADICTS THE PARAGRAPH ABOVE. That paragraph
+// says MigrateAsync "is once again the honest call for both providers". It is
+// not, and the first deployment to Azure SQL proved it: the container crashed
+// on every start with
+//
+//   PendingModelChangesWarning: The model for context 'QuotesDbContext' has
+//   pending changes. Add a new migration before updating the database.
+//
+// and EF Core 10 makes that an error rather than a warning, so the process
+// exited before Kestrel bound a port. The revision reported ActivationFailed
+// and ingress had no healthy backend at all, which presents as a connection
+// refusal rather than an HTTP error.
+//
+// The pending change was FICTITIOUS. `dotnet ef migrations add` against
+// QuotesApi.Migrations.SqlServer produced an EMPTY Up() and left the model
+// snapshot byte-identical, which is what finally located the real fault:
+//
+//   * QuotesApi.Migrations.SqlServer references QuotesApi. QuotesApi
+//     references nothing, so that assembly is NOT deployed with the app.
+//   * InfrastructureExtensions calls UseSqlServer(connection) with no
+//     MigrationsAssembly, so EF falls back to the assembly holding the
+//     DbContext -- QuotesApi -- whose Migrations/ folder is the SQLITE set.
+//   * So EF diffed the SQL Server model against a SQLite snapshot. Of course
+//     it found changes.
+//
+// Adding the reference the other way is a circular dependency: the migrations
+// assembly needs QuotesDbContext, which lives in this project. The structural
+// fix is to extract the DbContext into its own assembly, and that is a
+// follow-up rather than something to attempt mid-migration.
+//
+// So SQL Server migrations are applied OUT OF BAND, by the deployment, from
+// an idempotent script generated out of the provider's own migrations project:
+//
+//   dotnet ef migrations script --idempotent \
+//     --project QuotesApi.Migrations.SqlServer \
+//     --startup-project QuotesApi.Migrations.SqlServer \
+//     --context QuotesApi.Data.QuotesDbContext -o migrate.sql
+//
+// This is the ordinary practice for anything running more than one replica
+// anyway: two instances starting together both call MigrateAsync, and EF's
+// migration lock is the only thing standing between that and a race.
+//
+// SQLite keeps migrating in-process, because there the migrations ARE in this
+// assembly and a local file database has no deployment pipeline to hook.
+//
+// WHAT THIS IS NOT: it is not a return to the pre-Day-19 EnsureCreatedAsync
+// branch. That branch bypassed the migration history entirely and let the
+// provider-specific migrations rot unnoticed. This one still applies those
+// exact migrations, still writes __EFMigrationsHistory, and refuses to start
+// if they have not been applied -- the schema is still described by
+// migrations, and the only thing that moved is who runs them.
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<QuotesDbContext>();
 
-    await db.Database.MigrateAsync();
+    if (db.Database.IsSqlServer())
+    {
+        // GetAppliedMigrationsAsync reads __EFMigrationsHistory from the
+        // database. Unlike GetPendingMigrationsAsync it does NOT need the local
+        // migrations assembly, which is the whole reason it can be used here.
+        var applied = (await db.Database.GetAppliedMigrationsAsync()).ToList();
+
+        if (applied.Count == 0)
+        {
+            // Fail loudly and immediately rather than serving requests against
+            // an empty or half-built schema. An app that starts and then 500s
+            // on every data endpoint is much harder to diagnose than one that
+            // refuses to start and says why.
+            throw new InvalidOperationException(
+                "The SQL Server database has no applied migrations. They are applied by the " +
+                "deployment, not by this app -- see the comment above this line. Generate the " +
+                "script with `dotnet ef migrations script --idempotent --project " +
+                "QuotesApi.Migrations.SqlServer --startup-project QuotesApi.Migrations.SqlServer " +
+                "--context QuotesApi.Data.QuotesDbContext` and apply it to the target database.");
+        }
+
+        app.Logger.LogInformation(
+            "SQL Server schema is at migration {Migration} ({Count} applied). Migrations are " +
+            "applied by the deployment, not at startup.",
+            applied[^1], applied.Count);
+    }
+    else
+    {
+        await db.Database.MigrateAsync();
+    }
 
     await DbInitializer.SeedAsync(db);
 }

@@ -1,29 +1,57 @@
 name: day17-swa-deploy
 
-# Day 17 -- deploy Day13/quotes-web to Azure Static Web Apps.
+# THIS WORKFLOW NO LONGER DEPLOYS ANYTHING. It is a front-end GATE.
 #
-# A separate workflow from ci.yml on purpose. ci.yml is the .NET gate: it
-# restores, builds and tests QuotesApi.slnx and smoke-tests the container image.
-# It has no reason to know that a front end exists, and adding front-end steps
-# to it would mean a broken Angular build blocks a pure-API pull request.
+# WHY, AND WHY THE NAME AND FILENAME ARE UNCHANGED.
 #
-# WHAT THIS WORKFLOW DOES NOT DO: it does not deploy the BFF. The Function App
-# that holds the managed identity is deployed by day17-bff-deploy.yml, because
-# `api_location` here must be empty -- see the note on that input below.
+# Day 17 built Day13/quotes-web and uploaded it to Azure Static Web Apps, which
+# reverse-proxied /api/* to the Container App over a linked backend. Day 24 moved
+# the whole deployment to a new subscription (the old one is out of credit), and
+# that subscription's "Allowed resource deployment regions" policy permits five
+# regions -- indonesiacentral, malaysiawest, indiasouthcentral, uaenorth,
+# koreacentral -- while Microsoft.Web/staticSites is offered in only a handful of
+# regions worldwide, none of them on that list. A Static Web App cannot be
+# created here at all.
+#
+# So the SPA is now built into the API image and served by the Container App;
+# see the "Angular front end" block in Day7/piece2/QuotesApi/Program.cs and the
+# front-end steps in day17-api-deploy.yml. Deploying the front end is that
+# workflow's job now, triggered by the Day13/quotes-web/** path.
+#
+# WHAT IS LOST, stated rather than glossed: the Static Web App was also the
+# authentication boundary. The Container App had Container Apps authentication
+# enabled with the SWA as its linked identity provider, so unauthenticated
+# traffic never reached the container. Its ingress is now external by design and
+# the API defends itself with its own authentication. That is a genuine
+# reduction in defence-in-depth, forced by a policy this project does not
+# control, and it is recorded as a deviation in
+# Day24/docs/day24-deployment-stacks-azd-migration-plan.md. Also gone: pull
+# request preview environments, which had no equivalent here.
+#
+# The name and filename stay put on purpose. They are what branch protection on
+# main names as a required check, and renaming a required check makes it
+# unsatisfiable -- every pull request then waits for a check that will never
+# report. The rename belongs in the same change as the branch-protection
+# update, and not in the middle of a subscription migration.
+#
+# What it still does is worth keeping: a broken Angular build, a failing test, a
+# lint error or an oversized image should be caught on the pull request rather
+# than at deploy time, and it should be reported as a front-end failure rather
+# than folded into the .NET gate in ci.yml.
 
 on:
   push:
     branches:
-      # main only. Day 17 deployed from its own feature branch while the SWA
-      # resource was being wired up; that branch is merged and the resource now
-      # takes production uploads from main. Leaving the old branch here would
-      # let a stale re-push overwrite the production environment.
       - main
     paths:
       - 'Day13/quotes-web/**'
       - '.github/workflows/day17-swa-deploy.yml'
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    # `closed` is gone along with the close_pull_request job below it: there is
+    # no preview environment left to tear down, and the job would have failed on
+    # a missing deployment token while trying to close something that was never
+    # opened.
+    types: [opened, synchronize, reopened]
     branches: [ main ]
     paths:
       - 'Day13/quotes-web/**'
@@ -31,23 +59,18 @@ on:
   workflow_dispatch:
 
 concurrency:
-  # Two concurrent uploads to the same SWA environment can interleave and leave
-  # index.html pointing at chunk hashes from the other build, so runs that
-  # target the same environment must be serialised. What they must NOT do is
-  # cancel each other when the target is production.
+  # Kept as it was, though the stakes are lower now that nothing is uploaded.
+  # Pull-request runs group by PR number so a re-push replaces only that PR's own
+  # in-flight run; cancel-in-progress is off for main.
   #
-  # The old rule was group: swa-${{ github.ref }} with cancel-in-progress: true
-  # for every event, and it silently skipped a production deploy: the run for
-  # the merge commit on main was cancelled two seconds in with "Canceling since
-  # a higher priority waiting request for swa-refs/heads/main exists", so main
-  # was never uploaded even though every check went green. A cancelled
+  # The original rule was group: swa-${{ github.ref }} with cancel-in-progress
+  # true for every event, and it silently skipped a production deploy: the run
+  # for a merge commit on main was cancelled two seconds in with "Canceling
+  # since a higher priority waiting request for swa-refs/heads/main exists", so
+  # main was never uploaded even though every check went green. A cancelled
   # production deploy is worse than a queued one -- it leaves the live site on
-  # the previous commit with nothing red to show it.
-  #
-  # So: pull-request runs group by PR number (a re-push to the same PR still
-  # replaces its own in-flight preview build), and everything else groups by
-  # ref. cancel-in-progress is off for main, which makes production deploys
-  # queue and run in order instead of pre-empting one another.
+  # the previous commit with nothing red to show it. That lesson now lives in
+  # day17-api-deploy.yml, which is what actually ships the front end.
   group: swa-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
@@ -55,9 +78,14 @@ defaults:
   run:
     working-directory: Day13/quotes-web
 
+# No id-token and no secrets: this workflow no longer talks to Azure. The
+# AZURE_STATIC_WEB_APPS_API_TOKEN secret it used to read can be deleted from the
+# repository once the old subscription is decommissioned.
+permissions:
+  contents: read
+
 jobs:
   build_and_deploy:
-    if: github.event_name != 'pull_request' || github.event.action != 'closed'
     runs-on: ubuntu-latest
 
     steps:
@@ -135,134 +163,27 @@ jobs:
       - name: Build
         run: npx ng build
 
-      # staticwebapp.config.json lives in public/, not the project root, so the
-      # Angular build copies it into dist/quotes-web/browser/. SWA reads the file
-      # from the deployed artifact -- a copy sitting at the project root is never
-      # uploaded and is silently ignored, which looks exactly like the config
-      # having no effect.
-      - name: Confirm the SWA config was shipped
+      # The build output has to be exactly where day17-api-deploy.yml's staging
+      # step expects it. That workflow asserts the same path, but it only runs on
+      # Day7/piece2 and Day13/quotes-web changes to main -- so an angular.json
+      # change that relocates the output would pass here and fail there, at
+      # deploy time. Asserting it in both places costs two lines.
+      - name: Confirm the bundle is where the API build expects it
         run: |
-          test -f dist/quotes-web/browser/staticwebapp.config.json \
-            || { echo "::error::staticwebapp.config.json missing from the build output"; exit 1; }
-          python3 -c "
-          import json, sys
-          cfg = json.load(open('dist/quotes-web/browser/staticwebapp.config.json'))
-          exclude = cfg['navigationFallback']['exclude']
-          assert '/api/*' in exclude, 'navigationFallback.exclude must contain /api/* -- without it API errors return index.html with a 200'
-          print('SWA config present and /api/* excluded from the SPA fallback.')
-          "
+          test -f dist/quotes-web/browser/index.html \
+            || { echo "::error::dist/quotes-web/browser/index.html missing. day17-api-deploy.yml copies that exact path into QuotesApi/spa/; if angular.json moved it, update both."; exit 1; }
+          echo "Bundle present at dist/quotes-web/browser/index.html"
 
-      # PRE-FLIGHT on the one input the deploy action cannot recover from. It
-      # prints LENGTHS ONLY, never the value.
+      # staticwebapp.config.json is now inert -- nothing reads it, because there
+      # is no Static Web App. It is deliberately NOT deleted: it is the record of
+      # the routing rules the SWA enforced, and the one that mattered most
+      # (navigationFallback.exclude containing /api/*) is now enforced by the
+      # regex in Program.cs's MapFallbackToFile. Deleting the file would lose the
+      # only written statement of why that regex exists.
       #
-      # Two different problems used to arrive as the same red X here, and they
-      # have nothing in common except the step they fail:
-      #
-      #   * The secret is present but malformed -- a trailing newline picked up
-      #     from the GitHub secret textarea, or a paste that was cut short. The
-      #     deploy action reports this as "No matching Static Web App was found
-      #     or the api key was invalid", which reads like an Azure-side problem.
-      #
-      #   * The secret is not visible to the run at all, which measures as
-      #     length 0. This is NOT a bad paste, so telling someone to re-paste it
-      #     wastes their time -- the secret exists somewhere the run cannot read
-      #     it, and only four things cause that.
-      #
-      # A fork pull request is the one case where length 0 is expected and not a
-      # mistake: GitHub deliberately withholds secrets from it. That skips the
-      # deploy with a notice instead of failing a check the contributor has no
-      # way to make green.
-      - name: Check the shape of the deployment token
-        id: token
-        env:
-          RAW: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
-          IS_FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork }}
+      # This step exists so the file cannot rot into looking authoritative.
+      - name: Note the inert SWA config
         run: |
-          STRIPPED="$(printf '%s' "$RAW" | tr -d '[:space:]')"
-          {
-            echo "### Deployment token shape"
-            echo
-            echo "| | value |"
-            echo "|---|---|"
-            echo "| raw length | ${#RAW} |"
-            echo "| whitespace-stripped length | ${#STRIPPED} |"
-            echo "| secret visible to this run | $([ -n "$STRIPPED" ] && echo yes || echo NO) |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [ -z "$STRIPPED" ]; then
-            if [ "$IS_FORK_PR" = "true" ]; then
-              echo "::notice::Fork pull request -- GitHub withholds deployment secrets from it by design. Skipping the deploy; it runs on merge to main."
-              echo "deploy=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-
-            echo "::error::AZURE_STATIC_WEB_APPS_API_TOKEN measured 0 characters, so this run cannot see the secret at all. This is not a truncated paste. Check, in this order: (1) it is saved on THIS repository (Settings > Secrets and variables > Actions on thinkbridge-thinkschool/VaishaleeSingh) and not on a personal fork; (2) it is under Secrets, not Variables; (3) if it was saved as an Environment secret, this job must declare that environment with a top-level environment: key, otherwise the secret is invisible to it; (4) the name matches exactly, including case and underscores."
-            exit 1
+          if [ -f public/staticwebapp.config.json ]; then
+            echo "::notice::public/staticwebapp.config.json is retained for reference only -- no Static Web App exists in this subscription. Its /api/* fallback exclusion is now implemented by MapFallbackToFile in Program.cs."
           fi
-
-          if [ "${#RAW}" -ne "${#STRIPPED}" ]; then
-            echo "::error::The secret contains whitespace (raw ${#RAW} vs stripped ${#STRIPPED}). Re-save it with no trailing newline or space."
-            exit 1
-          fi
-
-          # An Azure SWA deployment token is a long hex string; anything this
-          # short is a paste that was cut off, not a real token.
-          if [ "${#STRIPPED}" -lt 40 ]; then
-            echo "::error::The secret is only ${#STRIPPED} characters -- far shorter than an Azure SWA deployment token. It was probably truncated on copy. Re-copy it from the Static Web App: Overview > Manage deployment token."
-            exit 1
-          fi
-
-          echo "Token is ${#STRIPPED} characters with no whitespace."
-          echo "deploy=true" >> "$GITHUB_OUTPUT"
-
-      - name: Deploy to Azure Static Web Apps
-        id: deploy
-        # Skipped only when the pre-flight found no secret on a fork pull
-        # request. Every other missing-secret case already failed above.
-        if: steps.token.outputs.deploy == 'true'
-        uses: Azure/static-web-apps-deploy@v1
-        with:
-          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          action: upload
-          # WITH skip_app_build: true, app_location MUST be the built artifact
-          # folder and output_location is ignored entirely. Pointing app_location
-          # at the project root and describing the build output in
-          # output_location -- which is what you do when the action does the
-          # building -- fails with:
-          #   Failed to find a default file in the app artifacts folder
-          #   (Day13/quotes-web). Valid default files: index.html,Index.html.
-          # because it looks for index.html directly under app_location and never
-          # applies output_location. The Build step above already produced
-          # Day13/quotes-web/dist/quotes-web/browser, so that is the artifact.
-          app_location: 'Day13/quotes-web/dist/quotes-web/browser'
-          output_location: ''
-          # MUST be empty. This deployment uses a LINKED backend -- a separate
-          # Function App with its own system-assigned managed identity, because
-          # SWA's built-in managed functions run in a Microsoft-managed
-          # subscription and cannot be given an identity to use. A non-empty
-          # api_location makes SWA try to build and host a managed API as well,
-          # which conflicts with the link (an environment may have one backend
-          # type, not both).
-          api_location: ''
-          skip_app_build: true
-
-  # Tear down the preview environment when a PR closes. Note that PR preview
-  # environments do not support linked backends, so /api/* 404s on a preview URL.
-  # That is a platform limitation, not a misconfiguration -- previews are
-  # static-only by design here.
-  close_pull_request:
-    # A fork PR never got a preview environment (no secret, so no upload), and
-    # this job would fail on the same missing secret while trying to tear down
-    # something that was never created.
-    if: >-
-      github.event_name == 'pull_request'
-      && github.event.action == 'closed'
-      && github.event.pull_request.head.repo.fork == false
-    runs-on: ubuntu-latest
-    steps:
-      - name: Close preview environment
-        uses: Azure/static-web-apps-deploy@v1
-        with:
-          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
-          action: close

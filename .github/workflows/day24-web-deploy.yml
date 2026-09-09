@@ -1,0 +1,183 @@
+name: day24-web-deploy
+
+# Day 24 -- deploys Day13/quotes-web to its OWN container app.
+#
+# This restores the separation this project had on the previous subscription,
+# where the front end was an Azure Static Web App and the API a container app:
+# two resources, two images, two deployments. Static Web Apps cannot be
+# recreated here -- Microsoft.Web/staticSites is offered in only a handful of
+# regions worldwide and none are permitted by this subscription's
+# allowed-locations policy -- so nginx in a container app takes its place,
+# including the reverse proxy that made SWA's linked backend work.
+#
+# An intermediate attempt built the bundle into the API image. It worked as a
+# deployment and was wrong as an architecture: an Angular change rebuilt and
+# redeployed the API, and a front-end failure could turn an API deployment red.
+# It also cost an afternoon to a bug that cannot occur here -- ASP.NET's
+# StaticFileMiddleware declines to serve a file once routing has selected an
+# endpoint, and a catch-all SPA fallback selects one for every request, so every
+# asset came back as index.html with Content-Type: text/html. nginx has no
+# endpoint concept to collide with; try_files checks the filesystem first.
+#
+# WHAT REPLACED day17-swa-deploy.yml. That workflow still runs as a front-end
+# GATE -- lint, unit tests, the image budget, the build -- and deploys nothing.
+# This one deploys. They are separate so a red gate on a pull request reads as a
+# front-end problem, while this file's failures are always deployment problems.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Day13/quotes-web/**'
+      - '.github/workflows/day24-web-deploy.yml'
+  workflow_dispatch:
+
+concurrency:
+  # Same rule as the API workflow, and for the same reason. Grouped by PR number
+  # for pull-request runs so a re-push replaces only that PR's in-flight run;
+  # cancel-in-progress OFF for main, because a cancelled production deploy
+  # leaves the live site on the previous commit with nothing red to show it.
+  # day17-swa-deploy.yml lost a deploy to exactly that.
+  group: web-deploy-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# OIDC, not a stored service-principal secret. AZURE_CLIENT_ID / TENANT_ID /
+# SUBSCRIPTION_ID are identifiers, not credentials.
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  IMAGE: quotes-web
+  RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+  CONTAINER_APP: ${{ vars.AZURE_WEB_CONTAINER_APP }}
+  REGISTRY: ${{ vars.AZURE_CONTAINER_REGISTRY_ENDPOINT }}
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sign in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # `az acr login` writes a short-lived token into the Docker config. No ACR
+      # admin username or password is involved -- that stored credential is
+      # exactly what Day 17's OIDC work removed.
+      - name: Sign in to the registry
+        run: az acr login --name "${REGISTRY%%.*}"
+
+      # The image is built here rather than with `dotnet publish
+      # /t:PublishContainer`, which only exists for .NET projects. The
+      # Dockerfile is multi-stage: node builds the bundle, nginx serves it, and
+      # node does not ship in the final image.
+      #
+      # Tagged with the commit sha, never `latest`: an unversioned tag cannot be
+      # rolled back to, and Container Apps revisions are only useful if each one
+      # names a distinct image.
+      - name: Build and push the image
+        working-directory: Day13/quotes-web
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_SHA::12}"
+          docker build -t "$REGISTRY/$IMAGE:$TAG" .
+          docker push "$REGISTRY/$IMAGE:$TAG"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Roll the container app onto the new image
+        run: |
+          az containerapp update \
+            --name "$CONTAINER_APP" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$REGISTRY/$IMAGE:$TAG"
+
+      # A green deploy step only means Azure accepted the request. It does not
+      # mean the container started: a wrong target port, a failed pull, or an
+      # nginx config that fails to parse all report success here and then sit in
+      # Activating. This is what turns those into a red build instead of a
+      # working pipeline in front of a dead site.
+      - name: Wait for the new revision to run
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            state=$(az containerapp revision list \
+              --name "$CONTAINER_APP" --resource-group "$RESOURCE_GROUP" \
+              --query "[?properties.active].properties.runningState | [0]" -o tsv)
+            echo "attempt $attempt: runningState=$state"
+            if [ "$state" = "Running" ]; then exit 0; fi
+            if [ "$state" = "Failed" ] || [ "$state" = "Degraded" ] || [ "$state" = "ActivationFailed" ]; then
+              echo "::error::The new revision reported $state."
+              az containerapp logs show --name "$CONTAINER_APP" \
+                --resource-group "$RESOURCE_GROUP" --type system --tail 50 || true
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "::error::The new revision did not reach Running within five minutes."
+          az containerapp logs show --name "$CONTAINER_APP" \
+            --resource-group "$RESOURCE_GROUP" --type system --tail 50 || true
+          exit 1
+
+      # Three probes, each for a failure this project has actually had.
+      - name: Smoke-test the site
+        run: |
+          set -euo pipefail
+          fqdn=$(az containerapp show --name "$CONTAINER_APP" --resource-group "$RESOURCE_GROUP" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          origin="https://$fqdn"
+          echo "Probing $origin"
+
+          # 1. The shell. Checked for Angular's own <app-root> marker rather
+          # than a 200: '/' returns 200 whether it serves index.html or a stray
+          # file, and an image built from an empty dist would pass a status
+          # check while serving nothing.
+          for attempt in $(seq 1 10); do
+            body=$(curl -s --max-time 15 "$origin/" || true)
+            case "$body" in
+              *"<app-root"*) echo "The SPA shell is served."; break ;;
+            esac
+            echo "attempt $attempt: no app-root yet"
+            [ "$attempt" -eq 10 ] && { echo "::error::GET / never returned the Angular shell."; exit 1; }
+            sleep 6
+          done
+
+          # 2. A REAL ASSET, and its Content-Type. This is the exact check that
+          # would have caught the afternoon lost to the API serving the bundle:
+          # there, every asset returned 200 with Content-Type text/html because
+          # the SPA fallback answered before static files did. A module script
+          # served as HTML never executes, so the page rendered blank with
+          # nothing logged anywhere. Status alone cannot see it -- the header can.
+          main_js=$(printf '%s' "$body" | grep -oE 'main-[A-Z0-9]+\.js' | head -1)
+          [ -n "$main_js" ] || { echo "::error::Could not find the main bundle name in index.html."; exit 1; }
+          ctype=$(curl -s -o /dev/null -w '%{content_type}' --max-time 15 "$origin/$main_js")
+          echo "$main_js -> $ctype"
+          case "$ctype" in
+            *javascript*) echo "Assets are served as JavaScript." ;;
+            *) echo "::error::$main_js came back as '$ctype', not JavaScript. The SPA fallback is answering before static files."; exit 1 ;;
+          esac
+
+          # 3. The API through the proxy. nginx forwards /api to the backend, so
+          # this proves the linked-backend replacement works and the browser
+          # never needs a cross-origin request. The 400 body naming
+          # "credentials" is unmistakably this API's own validation problem, so
+          # it cannot pass on the SPA shell.
+          for attempt in $(seq 1 12); do
+            body=$(curl -s --max-time 20 -X POST "$origin/api/auth/login" \
+              -H 'Content-Type: application/json' -d '{"email":"","password":""}' || true)
+            case "$body" in
+              *credentials*) echo "The API answered through the proxy."; exit 0 ;;
+              *"<!doctype"*|*"<!DOCTYPE"*)
+                echo "::error::/api returned the SPA shell -- the nginx location block is ordered after the fallback."; exit 1 ;;
+            esac
+            echo "attempt $attempt: $(printf '%.120s' "$body")"
+            sleep 10
+          done
+          echo "::error::The API did not answer through $origin within two minutes."
+          exit 1
