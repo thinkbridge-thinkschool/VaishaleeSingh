@@ -130,3 +130,47 @@ THREE THINGS THIS EXPOSED, none of them created by Day 25:
 The cap did its job: it stopped a runaway log bill on a $100 twelve-month
 credit. Raising it would buy silence, not correctness. The fix is the
 verbosity and the exceptions, in that order.
+
+WHAT THE 0.76 GB OF EXCEPTIONS ACTUALLY WERE
+---------------------------------------------
+  AppExceptions | summarize n=count() by ProblemId, OuterMessage
+
+    ManagedIdentityCredential authentication failed: [Managed Identity]
+    Error Message: Unable to load the proper Managed Identity.
+    Azure.Identity.AuthenticationFailedException
+
+  AppExceptions | summarize n=count() by bin(TimeGenerated, 1h)
+    2026-09-08T12:00:00Z    28308        <- one hour, and no other
+
+  AppExceptions | summarize n=count() by OperationName, Method
+    Azure.Identity.MsalManagedIdentityClient
+        +<AcquireTokenForManagedIdentityAsyncCore>d__31.MoveNext   28308
+
+28,308 failures in a single hour -- about eight per second -- all of them the
+same thing: a credential unable to work out WHICH user-assigned identity to
+present. That is precisely the condition AZURE_CLIENT_ID removes.
+
+Phase 1 called that variable "a latent defect", on the reasoning that
+resolution worked "only because exactly one identity happens to be attached".
+That was too generous. It was not latent. It was failing in a retry loop, and
+the quota it helped exhaust was hiding the evidence -- the telemetry that
+would have shown the problem was the telemetry being dropped.
+
+WHAT IS AND IS NOT PROVEN, because the two are easy to conflate here.
+
+  Proven: managed identity acquisition works NOW. Today's container log shows
+  ManagedIdentityCredential.GetToken succeeded for servicebus.azure.net and
+  for monitor.azure.com, with "Managed Identity source selected: AppService
+  with ID: ClientId d9d18fa7-..." -- named, not guessed. SQL health checks
+  pass and the Key Vault reference resolves, both over the same identity.
+
+  NOT proven: that AZURE_CLIENT_ID is what stopped the loop. The failures sit
+  in one hour on 8 September and nothing appears after it -- but nothing at
+  all appears after it, because that burst is part of what pushed the
+  workspace OverQuota and ingestion stopped. Absence of later exceptions is
+  the quota, not evidence. The app was also restarted and redeployed several
+  times in between, so more than one thing changed.
+
+  The clean test is a window with ingestion working: after the quota resets at
+  2026-09-09T09:00:00Z, query AppExceptions again. Zero over a period with
+  live ingestion settles it; anything else names the real cause.
