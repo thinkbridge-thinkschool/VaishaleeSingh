@@ -232,19 +232,30 @@ vaulted and nothing was rewritten; the resource reclassified the string.
 
 The API already ran two authentication schemes side by side — `CustomJwt` for
 its own tokens and `EntraId`, routed per request by an `AddPolicyScheme` that
-inspects the `aud` claim. Day 25 moved the registration into the tenant that
-owns the subscription (`8d46a076-…`, Amity) with
-`Day25/scripts/02-entra-app-registrations.ps1`: an API registration exposing
-`api://<appId>/access`, and a public-client SPA registration using PKCE. Two
-registrations, **zero client secrets** — a browser cannot keep a secret, and
-the API only ever validates tokens.
+inspects the `aud` claim. That much predates this day and is deployed.
 
-That move surfaced a bug that had been there all along. `azureAdAudience` was
+**Not yet applied, and stated as such.** The Entra registration still points at
+tenant `f774bb68-…` and app `91566dbd-…` — the *old* subscription's directory.
+Token validation is an HTTPS call to an authority URL and has no relationship
+to which tenant owns the subscription, so it works; it is still wrong to leave,
+because it makes a directory nobody is paying for a permanent runtime
+dependency while every other identity here lives in Amity.
+`Day25/scripts/02-entra-app-registrations.ps1` is written and reviewed — an API
+registration exposing `api://<appId>/access` plus a public-client SPA
+registration using PKCE, **zero client secrets** between them — but it has not
+been run, so `main.dev.bicepparam` still carries the old values. Claiming
+otherwise would be easy and unverifiable, which is precisely why it is called
+out here.
+
+Writing it surfaced a real bug regardless. `azureAdAudience` is
 `api://quotes-api/access`, which is a *scope*, not an audience: Entra issues
 tokens whose `aud` is the resource's Application ID URI, with the scope carried
-separately in `scp`. The scheme would have failed audience validation on every
-genuine Entra token — unnoticed only because nothing has sent one yet, since
-the SPA still signs in against the app's own endpoints.
+separately in `scp`. The `EntraId` scheme would therefore fail audience
+validation on **every** genuine Entra token it was handed. Nothing caught it
+because nothing has sent one — the SPA signs in against the app's own
+`CustomJwt` endpoints, so the second scheme has never been exercised in anger.
+A dead code path is not a correct one. The script emits the right value; the
+fix lands when it runs.
 
 **Deliberately deferred:** retiring `CustomJwt` entirely. That is the fix that
 would delete the signing key rather than vault it, and it means migrating the
