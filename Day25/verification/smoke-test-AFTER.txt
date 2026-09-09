@@ -74,20 +74,59 @@ namespace whose disableLocalAuth is true. A SAS connection string could not
 have produced this, because the namespace rejects them. "Received 0 messages"
 is the correct result for an idle topic and is not a failure.
 
-APPLICATION INSIGHTS -- OPEN AT TIME OF WRITING
-------------------------------------------------
-A token for https://monitor.azure.com/ is acquired successfully, and no 401 or
-403 appears in the log. But a successful TOKEN IS NOT PROOF THE INGESTION ROLE
-WORKS, and it is worth being exact about why: Entra issues an access token to
-any authenticated principal regardless of what that principal is authorised to
-do. RBAC is enforced at the ingestion endpoint, one HTTP call later, and a
-missing Monitoring Metrics Publisher grant would surface there as a 403 -- not
-at token acquisition.
+APPLICATION INSIGHTS -- RESOLVED. EXPORT WORKS; THE WORKSPACE IS OVER QUOTA
+---------------------------------------------------------------------------
+Every query returned zero rows, which looked exactly like the failure mode the
+Day 25 change could have caused: DisableLocalAuth on, the exporter refused,
+telemetry silently gone. It was not that. The seven-day query settled it --
 
-The first queries returned 0 rows, taken within roughly two minutes of the
-requests being made, which is inside normal App Insights ingestion latency
-(typically 3-5 minutes). Unresolved rather than failed: re-query after five
-minutes, and grep the container log for 403 to distinguish the two.
+  requests | where timestamp > ago(7d) | summarize count() by bin(timestamp, 1d)
+  (no rows)
 
-Nothing else in Day 25 depends on the answer. Telemetry export is the only
-thing affected, and no claim in the submission rests on it.
+-- because it covers Day 24, when local auth was still enabled and the
+instrumentation key alone was sufficient. Telemetry had never arrived in this
+subscription, so the Day 25 change cannot be what stopped it.
+
+What is actually happening:
+
+  az monitor log-analytics workspace show -g thinkschool-dev-rg -n log7mo4cimyk4vnk
+    { "cap": 1.0, "status": "OverQuota", "nextReset": "2026-09-09T09:00:00Z" }
+
+  Usage | where TimeGenerated > ago(24h) | summarize GB=sum(Quantity)/1024 by DataType
+    ContainerAppConsoleLogs_CL   0.976
+    AppTraces                    0.832
+    AppExceptions                0.758
+    AppDependencies              0.002
+    AppRequests                  0.0000081
+
+Roughly 2.6 GB offered against a 1 GB/day cap (logDailyQuotaGb = 1 in
+main.dev.bicepparam, a deliberate cost guard on a student credit). A capped
+workspace DROPS ingestion once the cap is hit, so every query after that point
+returns nothing -- including the ones run to verify Day 25.
+
+AND THIS IS THE PROOF THE IDENTITY PATH WORKS. AppTraces and AppExceptions
+took 0.83 GB and 0.76 GB in twenty-four hours. That data was ingested by a
+component whose DisableLocalAuth is true, from an app whose only credential is
+a managed identity. Ingestion at that volume is not possible unless the
+Monitoring Metrics Publisher grant, the AZURE_CLIENT_ID selection and
+options.Credential on UseAzureMonitor are all correct. The zero-row queries
+were an artefact of the quota, not evidence about authentication.
+
+THREE THINGS THIS EXPOSED, none of them created by Day 25:
+
+  1. The log volume is not a choice anyone made. MSAL writes a dozen INFO
+     lines per token acquisition and the Service Bus receivers log
+     ReceiveBatchAsync start/done for both subscriptions every 60 seconds
+     forever. Serilog is shipping those at Information level.
+  2. THE SAME NOISE IS PAID FOR TWICE. ContainerAppConsoleLogs_CL is the
+     container's stdout; AppTraces is largely the same lines again, exported
+     through Serilog into App Insights. Together they are 1.8 of the 2.6 GB.
+  3. AppExceptions AT 0.76 GB/DAY IS ITS OWN DEFECT. Something throws
+     continuously, and the quota has been swallowing the evidence -- an
+     exception loop nobody could see because the telemetry that would show it
+     was being dropped. Tracked separately; it is not an identity problem and
+     is not in Day 25's scope.
+
+The cap did its job: it stopped a runaway log bill on a $100 twelve-month
+credit. Raising it would buy silence, not correctness. The fix is the
+verbosity and the exceptions, in that order.
