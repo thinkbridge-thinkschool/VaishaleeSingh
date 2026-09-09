@@ -247,17 +247,61 @@ if ($null -ne $spaApp -and $PSCmdlet.ShouldProcess($SpaDisplayName, 'set SPA red
 # ---------------------------------------------------------------------------
 # 3. The lines to paste
 # ---------------------------------------------------------------------------
+# WRITTEN INTO THE PARAMETER FILE RATHER THAN PRINTED TO COPY. Three GUIDs
+# transcribed by hand is three chances to transpose a character, and every one
+# of those mistakes fails the same way -- as an audience or issuer mismatch at
+# token validation, which reads like a broken auth scheme rather than a typo.
+$paramFile = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..\..')) 'Day7\piece2\infra\main.dev.bicepparam'
+
+if (-not (Test-Path $paramFile)) {
+    Note "Could not find $paramFile. Set these by hand instead:"
+    Write-Host "param azureAdTenantId = '$tenantId'"
+    Write-Host "param azureAdClientId = '$apiAppId'"
+    Write-Host "param azureAdAudience = '$identifierUri'"
+} elseif ($PSCmdlet.ShouldProcess($paramFile, 'write the Entra parameters')) {
+    $content = Get-Content $paramFile -Raw
+    if ([string]::IsNullOrWhiteSpace($content)) { Die "$paramFile is empty." }
+
+    # The audience line is the anchor: it is the only one of the three this file
+    # currently sets, the other two falling through to main.bicep's defaults.
+    # Replacing it with all three moves every Entra value into one visible place
+    # rather than leaving two of them inherited and invisible here.
+    $replacement = @"
+param azureAdTenantId = '$tenantId'
+param azureAdClientId = '$apiAppId'
+
+// api://<appId>, the Application ID URI -- NOT the scope. Entra puts the
+// resource's app ID URI in the token's aud claim and carries the scope
+// separately in scp, so the previous value ('api://quotes-api/access') would
+// have failed audience validation on every genuine token.
+param azureAdAudience = '$identifierUri'
+"@
+
+    $pattern = "(?m)^param azureAdAudience = '[^']*'"
+    if ($content -notmatch $pattern) {
+        Note 'Could not find the azureAdAudience line to replace. Set these by hand:'
+        Write-Host "param azureAdTenantId = '$tenantId'"
+        Write-Host "param azureAdClientId = '$apiAppId'"
+        Write-Host "param azureAdAudience = '$identifierUri'"
+    } else {
+        # Idempotent: a re-run rewrites the same three lines rather than stacking
+        # duplicates, because the tenant and client lines are removed first.
+        $content = $content -replace "(?m)^param azureAdTenantId = '[^']*'\r?\n", ''
+        $content = $content -replace "(?m)^param azureAdClientId = '[^']*'\r?\n", ''
+        $content = [regex]::Replace($content, $pattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $replacement.TrimEnd() }, 1)
+        Set-Content -Path $paramFile -Value $content -NoNewline
+        Ok "Wrote the three Entra parameters into main.dev.bicepparam"
+    }
+}
+
 Write-Host ''
-Write-Host 'Put these in infra/main.dev.bicepparam:' -ForegroundColor Cyan
+Write-Host 'Values written:' -ForegroundColor Cyan
+Write-Host "  tenant   $tenantId"
+Write-Host "  clientId $apiAppId"
+Write-Host "  audience $identifierUri"
 Write-Host ''
-Write-Host "param azureAdTenantId = '$tenantId'"
-Write-Host "param azureAdClientId = '$apiAppId'"
-Write-Host "param azureAdAudience = '$identifierUri'"
-Write-Host ''
-Note "azureAdAudience is api://<appId> and NOT the scope. The token's aud claim is"
-Note "the resource's Application ID URI; the scope travels separately in scp. The"
-Note "old value ('api://quotes-api/access') would have failed audience validation"
-Note 'on every real Entra token -- unnoticed only because nothing has sent one yet.'
+Note "The audience is api://<appId> and NOT the scope. A token's aud claim is the"
+Note 'resource Application ID URI; the scope travels separately in scp.'
 Write-Host ''
 if ($null -ne $spaApp) {
     Write-Host 'For the SPA, when it moves to MSAL (not this session):' -ForegroundColor Cyan
@@ -268,4 +312,10 @@ if ($null -ne $spaApp) {
 }
 Note 'Neither registration has a client secret, and neither needs one: the SPA is a'
 Note 'public client using PKCE, and the API only validates tokens.'
+Write-Host ''
+Write-Host 'Next:' -ForegroundColor Cyan
+Write-Host '  1. Review the change:  git diff Day7/piece2/infra/main.dev.bicepparam'
+Write-Host '  2. Redeploy the stack so the container app picks up the new AzureAd__* values.'
+Write-Host '  3. Re-run Day25/scripts/00-prove-no-secrets.ps1 -- it should still be 13/0,'
+Write-Host '     because none of this adds a secret. That is the point of checking.'
 Write-Host ''

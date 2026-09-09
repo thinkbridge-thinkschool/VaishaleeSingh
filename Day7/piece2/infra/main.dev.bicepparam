@@ -131,19 +131,25 @@ param keyVaultPurgeProtection = false
 param keyVaultSoftDeleteRetentionInDays = 7
 
 // --- Entra ID ------------------------------------------------------------
-// Unchanged, and pointing at the OLD tenant — see the header. Still unresolved
-// and still stated rather than guessed: appsettings.json declares
-// AzureAd:Audience as 'api://quotes-api/access'; the app that ran in the old
-// subscription used 'api://91566dbd-d857-488a-858d-475e60b309b7', the
-// app-ID-URI form. They cannot both be right. Ask the directory, which is still
-// reachable:
+// STILL THE OLD TENANT, AND THE AUDIENCE BELOW IS WRONG. Both are fixed by
+// running Day25/scripts/02-entra-app-registrations.ps1, which registers the
+// API and a public-client SPA in the Amity tenant and then rewrites the three
+// lines below in place.
 //
-//   az login --tenant f774bb68-0575-4cd2-9d4c-3b4e593d1110 --allow-no-subscriptions
-//   az ad app show --id 91566dbd-d857-488a-858d-475e60b309b7 \
-//     --query "{uris:identifierUris, scopes:api.oauth2PermissionScopes[].value}"
+// This file used to record the audience as an open question: appsettings.json
+// declares AzureAd:Audience as 'api://quotes-api/access', while the app in the
+// old subscription used 'api://91566dbd-…', the app-ID-URI form, and they
+// cannot both be right. They are not. Entra issues an access token whose `aud`
+// claim is the RESOURCE'S APPLICATION ID URI — api://<appId> — and carries the
+// scope separately in `scp`. The value below is a scope, so the EntraId scheme
+// would reject every genuine Entra token handed to it.
 //
-// A token whose audience does not match is rejected, so getting this wrong
-// disables the Entra scheme — it does not weaken it.
+// Nothing has caught that because nothing has sent one: the SPA signs in
+// against the app's own CustomJwt endpoints, so the second scheme has never
+// been exercised. A dead code path is not a correct one.
+//
+// A token whose audience does not match is rejected outright, so getting this
+// wrong disables the Entra scheme rather than weakening it.
 param azureAdAudience = 'api://quotes-api/access'
 
 // --- Observability -------------------------------------------------------
