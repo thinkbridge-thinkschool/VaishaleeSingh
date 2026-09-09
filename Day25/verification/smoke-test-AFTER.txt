@@ -1,0 +1,33 @@
+Day 25 -- smoke test after the zero-secrets change
+Run at: 2026-09-09 (dev, thinkschool-dev-rg, uaenorth)
+
+$api = "https://quotes-api-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io"
+curl.exe -s -o NUL -w "live  %{http_code}\n" --max-time 120 "$api/health/live"
+curl.exe -s -w "`nready %{http_code}\n" --max-time 120 "$api/health/ready"
+
+live  200
+{"service":"QuotesApi","status":"Healthy","totalDurationMs":4.39,"checks":[{"name":"database","status":"Healthy","durationMs":3.59,"error":false}]}
+ready 200
+
+WHY THIS IS THE END-TO-END IDENTITY PROOF, AND NOT JUST AN UPTIME CHECK.
+
+A zero-secrets result achieved by breaking the application is not a pass, so
+the proof script's 13/0 needs this beside it. One 200 from /health/ready
+establishes both halves of the identity story at once:
+
+  * THE APP BOOTED, which means the Key Vault reference resolved. Jwt:Secret
+    is bound through AddOptions<JwtOptions>().ValidateDataAnnotations()
+    .ValidateOnStart() with [Required] and [MinLength(32)], so a missing or
+    truncated value is a startup failure, not a later 500. A running process
+    is therefore evidence that the app's managed identity authenticated to
+    kv-7mo4cimyk4vnk and read a real key -- no assertion in the proof script
+    could establish that as directly.
+
+  * THE DATABASE CHECK PASSED, which means EF Core opened a connection to
+    sql-quotes-7mo4cimyk4vnk over the managed identity. The server is
+    azureADOnlyAuthentication, so there is no password path that could have
+    produced this result: 3.59ms of Healthy is a token being accepted.
+
+Service Bus is not exercised by a health probe and is not claimed here. Its
+evidence is the namespace's disableLocalAuth plus the two data-plane role
+assignments, both asserted in no-secrets-AFTER.txt.
