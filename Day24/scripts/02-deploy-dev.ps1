@@ -83,21 +83,21 @@ function Invoke-Checked([string] $What, [scriptblock] $Command) {
 Step 'Preconditions'
 # ---------------------------------------------------------------------------
 
-# A signing key from randomness, generated here if the caller has not set one.
+# DAY 25 REMOVED THE SIGNING KEY FROM THIS SCRIPT.
 #
-# NOT derived from a name, an enrolment number, or anything else guessable, and
-# not reused from the old subscription: a subscription cutover is the right
-# moment to invalidate every outstanding token rather than carry them across.
-# Only ever held in this process's environment -- never written to a file, and
-# not echoed below.
-if (-not $env:JWT_SECRET -or $env:JWT_SECRET.Length -lt 32) {
-    $env:JWT_SECRET = [Convert]::ToBase64String((1..48 | ForEach-Object { Get-Random -Maximum 256 }))
-    Note "Generated a fresh 48-byte JWT_SECRET for this run. It is NOT persisted -- if you"
-    Note "need it again (to run this script twice against one deployment, or to debug a"
-    Note "token), set `$env:JWT_SECRET yourself before running."
-} else {
-    Ok "Using the JWT_SECRET already set in this session ($($env:JWT_SECRET.Length) chars)."
-}
+# This block used to generate a JWT_SECRET and pass it into the deployment,
+# because modules/api.bicep took the key as a @secure() parameter. It no
+# longer does: the key lives in Key Vault, the container app holds a Key Vault
+# REFERENCE, and the value is written straight to the vault by
+# Day25/scripts/01-seed-jwt-secret.ps1.
+#
+# Deleting this is not tidying. Left in place it would keep writing the secret
+# into the azd environment file on this machine, which is one of the four
+# copies Day 25 exists to get rid of -- and it generated the key with
+# Get-Random, a seeded pseudo-random source with no business producing a
+# signing key.
+#
+# Nothing needs to be exported before running this script any more.
 
 foreach ($tool in @('az', 'azd', 'dotnet')) {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { Die "$tool is not on PATH." }
@@ -307,7 +307,7 @@ try {
     azd env set AZURE_CREATE_CAE            true               | Out-Null
     azd env set AZURE_PRINCIPAL_ID          $SqlAdminObjectId  | Out-Null
     azd env set SQL_ENTRA_ADMIN_LOGIN       $SqlAdminLogin     | Out-Null
-    azd env set JWT_SECRET                  $env:JWT_SECRET    | Out-Null
+    # JWT_SECRET deliberately NOT set here any more -- see the Day 25 note above.
 
     # ---- The outputs azd would normally have written itself ----------------
     #
