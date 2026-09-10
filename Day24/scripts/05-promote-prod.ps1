@@ -310,16 +310,37 @@ try {
     # own deny assignment blocks the stack's own deletion of the previous
     # SQL firewall rule, and every later update reports `failed` with
     # DenyAssignmentAuthorizationFailed while orphan rules accumulate.
-    $c = Invoke-AzText @('stack', 'sub', 'create', '--name', $StackName, '--location', $Location,
-                         '--template-file', 'infra/main.bicep', '--parameters', 'infra/main.prod.bicepparam',
-                         '--action-on-unmanage', 'deleteAll', '--deny-settings-mode', 'denyDelete',
-                         '--deny-settings-apply-to-child-scopes',
-                         '--deny-settings-excluded-actions',
-                         'Microsoft.Resources/subscriptions/resourceGroups/delete',
-                         'Microsoft.Sql/servers/firewallRules/delete',
-                         '--description', 'QuotesApi prod - Day 24 promotion', '--yes', '-o', 'none')
-    if ($c.ExitCode -ne 0) {
-        Write-Host $c.Text
+    # CALLED DIRECTLY, NOT THROUGH Invoke-AzText, AND THAT IS THE POINT.
+    #
+    # Invoke-AzText splats a PowerShell array into az. That is fine for every
+    # other call in this script and wrong for this one:
+    # --deny-settings-excluded-actions takes MULTIPLE values, and splatted
+    # through az.bat only the first bound to the flag while the second became
+    # a positional argument:
+    #
+    #   ERROR: unrecognized arguments: Microsoft.Sql/servers/firewallRules/delete
+    #
+    # 02-deploy-dev.ps1 passes this flag by direct invocation with backtick
+    # continuation and has always worked, so that is the proven form and this
+    # matches it rather than inventing a third one. The exit code is still read
+    # explicitly, because a helper that hides it is how this script's sibling
+    # reported a failed query as "no rows".
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $createOutput = & az stack sub create --name $StackName --location $Location `
+            --template-file infra/main.bicep --parameters infra/main.prod.bicepparam `
+            --action-on-unmanage deleteAll --deny-settings-mode denyDelete `
+            --deny-settings-apply-to-child-scopes `
+            --deny-settings-excluded-actions `
+                'Microsoft.Resources/subscriptions/resourceGroups/delete' `
+                'Microsoft.Sql/servers/firewallRules/delete' `
+            --description 'QuotesApi prod - Day 24 promotion' --yes -o none 2>&1
+        $createExit = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previous }
+
+    if ($createExit -ne 0) {
+        Write-Host (($createOutput | Out-String).Trim())
         Note 'Day25/scripts/show-deploy-error.ps1 walks the nested deployments to find the failed leaf.'
         Die 'Stack create failed.'
     }
