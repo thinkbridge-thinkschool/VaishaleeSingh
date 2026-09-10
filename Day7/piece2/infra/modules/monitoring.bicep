@@ -121,6 +121,66 @@ resource metricsPublisherRoleAssignment 'Microsoft.Authorization/roleAssignments
   }
 }
 
+// ---------------------------------------------------------------------------
+// Day 26 — the query pack, deployed into the workspace
+// ---------------------------------------------------------------------------
+// LOADED FROM THE .kql FILES RATHER THAN RETYPED HERE, and that is the whole
+// reason this is worth doing in the template at all.
+//
+// A saved search is a copy. Two copies of a query drift, and the drift is
+// silent: the version in the portal is the one someone reads at 3am, and the
+// version in git is the one that gets reviewed and improved. loadTextContent
+// resolves at COMPILE time, so there is exactly one source of truth and a
+// change to a .kql file is a change to what the portal shows on the next
+// deployment. It also means a malformed path fails the build rather than
+// deploying an empty search.
+//
+// The comments inside each query travel with it. That is deliberate: the
+// reasoning about excluding health probes, or about sum(ItemCount) rather than
+// count(), is most needed by whoever opens the query in the portal without
+// having read the repository.
+var kqlRoot = '../../../../Day26/kql/'
+
+resource savedLatency 'Microsoft.OperationalInsights/workspaces/savedSearches@2020-08-01' = {
+  parent: logAnalyticsWorkspace
+  name: 'quotes-latency-by-endpoint'
+  properties: {
+    category: 'QuotesApi'
+    displayName: 'Latency p50/p95/p99 by endpoint'
+    query: loadTextContent('${kqlRoot}01-latency-by-endpoint.kql')
+  }
+}
+
+resource savedDependencies 'Microsoft.OperationalInsights/workspaces/savedSearches@2020-08-01' = {
+  parent: logAnalyticsWorkspace
+  name: 'quotes-dependency-breakdown'
+  properties: {
+    category: 'QuotesApi'
+    displayName: 'Dependency breakdown by total time'
+    query: loadTextContent('${kqlRoot}02-dependency-breakdown.kql')
+  }
+}
+
+resource savedErrorRate 'Microsoft.OperationalInsights/workspaces/savedSearches@2020-08-01' = {
+  parent: logAnalyticsWorkspace
+  name: 'quotes-error-rate'
+  properties: {
+    category: 'QuotesApi'
+    displayName: 'Error rate over five minutes (the alert query)'
+    query: loadTextContent('${kqlRoot}03-error-rate.kql')
+  }
+}
+
+resource savedTraceStitch 'Microsoft.OperationalInsights/workspaces/savedSearches@2020-08-01' = {
+  parent: logAnalyticsWorkspace
+  name: 'quotes-trace-stitch'
+  properties: {
+    category: 'QuotesApi'
+    displayName: 'Distributed trace: API to worker to database'
+    query: loadTextContent('${kqlRoot}04-trace-stitch.kql')
+  }
+}
+
 output logAnalyticsWorkspaceName string = logAnalyticsWorkspace.name
 output applicationInsightsName string = applicationInsights.name
 
@@ -130,3 +190,6 @@ output applicationInsightsName string = applicationInsights.name
 // repository's .gitignore.
 #disable-next-line outputs-should-not-contain-secrets
 output applicationInsightsConnectionString string = applicationInsights.properties.ConnectionString
+
+// Day 26: the alert rule is scoped to the component, so main.bicep needs its id.
+output applicationInsightsId string = applicationInsights.id

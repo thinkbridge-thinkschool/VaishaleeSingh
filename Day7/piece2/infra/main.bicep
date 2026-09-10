@@ -93,6 +93,18 @@ param keyVaultSoftDeleteRetentionInDays int = 7
 @description('Name of the secret holding the JWT signing key, inside the vault.')
 param jwtSecretName string = 'jwt-secret'
 
+// ---------------------------------------------------------------------------
+// Alerting — Day 26
+// ---------------------------------------------------------------------------
+@description('Where the error-rate alert sends mail. Personal data rather than a secret, so it is set in the parameter file and never defaulted here.')
+param alertEmailAddress string = ''
+
+@description('Error-rate percentage that fires the alert. The query refuses to report a rate at all below a minimum request count, so this threshold is measured against real traffic.')
+param errorRateThresholdPct int = 5
+
+@description('Deploy the alert and its action group. False leaves both out — useful for an environment nobody is watching, and required when no address is set.')
+param deployAlerts bool = true
+
 @description('JWT issuer.')
 param jwtIssuer string = 'https://yourapp.com'
 
@@ -589,6 +601,32 @@ module api 'modules/api.bicep' = {
     // little time to propagate, so a first deployment may still need one
     // retry. See the note on the secrets block in modules/api.bicep.
     jwtSecretUri: '${keyVault.outputs.keyVaultUri}secrets/${jwtSecretName}'
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Alerting — Day 26
+// ---------------------------------------------------------------------------
+// GUARDED ON THE ADDRESS, NOT JUST THE FLAG. An action group with no receiver
+// deploys happily and notifies nobody, which is the failure mode alerting
+// exists to prevent — so an empty alertEmailAddress skips the whole module
+// rather than producing a rule that looks configured and is not.
+module alerts 'modules/alerts.bicep' = if (deployAlerts && !empty(alertEmailAddress)) {
+  name: 'alerts'
+  scope: rg
+  params: {
+    alertRuleName: 'quotes-error-rate-${environmentType}'
+    actionGroupName: 'quotes-oncall-${environmentType}'
+    actionGroupShortName: 'quotes${environmentType}'
+    alertEmailAddress: alertEmailAddress
+    applicationInsightsId: monitoring.outputs.applicationInsightsId
+    location: location
+    tags: tags
+    errorRateThresholdPct: errorRateThresholdPct
+
+    // The SAME file the operator runs by hand, so the alert and the
+    // investigation cannot disagree about what an error rate is.
+    alertQuery: loadTextContent('../../../Day26/kql/03-error-rate.kql')
   }
 }
 

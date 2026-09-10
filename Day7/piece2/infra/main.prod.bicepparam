@@ -113,6 +113,16 @@ param location = 'koreacentral'
 param keyVaultPurgeProtection = true
 param keyVaultSoftDeleteRetentionInDays = 90
 
+// --- Alerting (Day 26) ----------------------------------------------------
+// Stricter than dev, and for a reason rather than for tidiness: production
+// does not scale to zero, so its five-minute windows carry real traffic and
+// the ratio is trustworthy at a lower threshold. Two percent sustained across
+// two consecutive windows on a service handling steady load is a genuine
+// incident, where the same figure in dev would be one failed request against
+// a cold start.
+param alertEmailAddress = 'vaishalisinghsln5@gmail.com'
+param errorRateThresholdPct = 2
+
 // --- Observability -------------------------------------------------------
 // 90 days, and NO daily cap. A quota that is hit drops telemetry, which means
 // the one incident big enough to blow the cap is the one you cannot
