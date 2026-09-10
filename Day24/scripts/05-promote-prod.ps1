@@ -424,6 +424,44 @@ try {
         return [pscustomobject]@{ Text = (($out | Out-String).Trim()); ExitCode = $code }
     }
 
+    # WAIT FOR A TERMINAL STATE FIRST.
+    #
+    # A deployment stack cannot be updated while it is mid-operation, and a
+    # FAILED create leaves it cleaning up after itself (actionOnUnmanage is
+    # deleteAll), so the state right after a failure is 'DeletingResources'.
+    # Re-running the promotion then fails with:
+    #
+    #   DeploymentStackInNonTerminalState ... currently in a non-terminal
+    #   state 'DeletingResources'
+    #
+    # which az reported underneath its own crash -- it hit a bug handling the
+    # error response ("The content for this response was already consumed")
+    # and printed a Python traceback with the one useful line buried in it.
+    # Nothing here can fix az's bug; waiting means not provoking it.
+    function Wait-ForTerminalStackState {
+        $terminal = @('succeeded', 'failed', 'canceled')
+        for ($attempt = 1; $attempt -le 60; $attempt++) {
+            $r = Invoke-AzText @('stack', 'sub', 'show', '--name', $StackName,
+                                 '--query', 'provisioningState', '-o', 'tsv')
+            # Not found is terminal in the sense that matters: there is nothing
+            # to wait for and the create will make it.
+            if ($r.ExitCode -ne 0) { return 'notfound' }
+            $state = $r.Text.Trim()
+            if ([string]::IsNullOrWhiteSpace($state)) { return 'notfound' }
+            if ($terminal -contains $state.ToLower()) { return $state }
+            if ($attempt -eq 1) { Note "Stack is '$state'; waiting for it to finish before touching it." }
+            Start-Sleep -Seconds 15
+        }
+        return 'timeout'
+    }
+
+    $stackState = Wait-ForTerminalStackState
+    switch ($stackState) {
+        'notfound' { Ok 'No existing stack; creating it.' }
+        'timeout'  { Die "The stack was still busy after 15 minutes. Check: az stack sub show --name $StackName --query provisioningState" }
+        default    { Ok "Stack is in terminal state '$stackState'; proceeding." }
+    }
+
     $create = Invoke-StackCreate
 
     # THE FIRST FAILURE IS THE EXPECTED ONE, AND THIS SCRIPT USED TO DIE ON IT.
@@ -464,6 +502,18 @@ try {
     }
 
     if ($create.ExitCode -ne 0) {
+        # az sometimes crashes while formatting a deployment error and prints a
+        # Python traceback with the real message inside it. Pull the lines that
+        # carry meaning to the top so the reason is not something the reader
+        # has to find.
+        $signal = $create.Text -split "`n" | Where-Object {
+            $_ -match 'Code:|Message:|ErrorCode|InNonTerminalState|Exceeded|is invalid|could not be'
+        }
+        if ($signal) {
+            Note 'The part of that output that matters:'
+            foreach ($line in ($signal | Select-Object -First 12)) { Note "  $($line.Trim())" }
+            Write-Host ''
+        }
         Write-Host $create.Text
         Note 'Day25/scripts/show-deploy-error.ps1 walks the nested deployments to find the failed leaf.'
         Note 'For a preflight rejection there is no nested deployment to walk; use:'
