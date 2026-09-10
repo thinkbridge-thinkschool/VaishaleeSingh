@@ -127,10 +127,6 @@ Scope: /subscriptions/.../resourceGroups/thinkschool-dev-rg
       ...
 ```
 
-<!-- FILL IN: paste the output of
-       az stack sub show -n quotes-dev --query "{name:name, state:provisioningState, resourceCount:length(resources)}" -o table
-     here, to show the stack's final state rather than only its initial plan. -->
-
 Final state: stack `quotes-dev` reached `succeeded` with 21 managed resources,
 including both container apps, Azure SQL, and Service Bus. SQL Server
 migrations were applied out of band (see `03-apply-sql-migrations.ps1` below)
@@ -138,8 +134,8 @@ and confirmed via `Day24/verification/sqlserver-migrations-applied.txt`.
 
 Live endpoints (dev):
 
-- API: `<FILL IN — az containerapp show -n quotes-api-dev -g thinkschool-dev-rg --query properties.configuration.ingress.fqdn -o tsv>`
-- Web: `<FILL IN — az containerapp show -n quotes-web-dev -g thinkschool-dev-rg --query properties.configuration.ingress.fqdn -o tsv>`
+- API: `https://quotes-api-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io`
+- Web: `https://quotes-web-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io`
 
 ## Deploy output — prod
 
