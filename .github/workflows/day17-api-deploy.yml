@@ -79,6 +79,44 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # PRECONDITION CHECK, AND IT EXISTS BECAUSE OF EXACTLY HOW THIS FAILED.
+      #
+      # These three come from repository VARIABLES, which are empty rather than
+      # absent when unset -- so a missing one does not stop the workflow, it
+      # quietly substitutes "". The first thing downstream to notice was
+      # `az acr login --name "${REGISTRY%%.*}"`, which received an empty name
+      # and reported:
+      #
+      #   ERROR: Registry names may contain only alpha numeric characters and
+      #   must be between 5 and 50 characters
+      #
+      # That message describes a malformed registry name. The actual fault was
+      # a setting nobody had filled in after the subscription moved, three
+      # steps earlier and in a different system entirely. Ten minutes of
+      # reading az documentation about naming rules is the cost of not
+      # checking here.
+      #
+      # Cheap, and first: it needs no Azure login, so an unconfigured fork
+      # fails in seconds with the fix in the message rather than after a build.
+      - name: Check the deployment variables are set
+        run: |
+          missing=0
+          check() {
+            if [ -z "$2" ]; then
+              echo "::error::Repository variable $1 is not set (or is empty)."
+              missing=1
+            fi
+          }
+          check AZURE_CONTAINER_REGISTRY_ENDPOINT "$REGISTRY"
+          check AZURE_RESOURCE_GROUP             "$RESOURCE_GROUP"
+          check AZURE_CONTAINER_APP                   "$CONTAINER_APP"
+
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::Set these under Settings > Secrets and variables > Actions > Variables. Their values are the deployment stack's outputs: az stack sub show -n quotes-dev --query outputs"
+            exit 1
+          fi
+          echo "registry=$REGISTRY  group=$RESOURCE_GROUP  app=$CONTAINER_APP"
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
