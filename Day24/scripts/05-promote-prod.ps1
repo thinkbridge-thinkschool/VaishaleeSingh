@@ -54,7 +54,19 @@ param(
     [string] $ExpectedTenant   = '8d46a076-d093-416d-a57b-8692cde13bf8',
 
     [string] $StackName        = 'quotes-prod',
-    [string] $Location         = 'koreacentral',
+
+    # READ FROM THE PARAMETER FILE WHEN NOT GIVEN, rather than defaulted here.
+    # It was defaulted to 'koreacentral' while main.prod.bicepparam said
+    # 'uaenorth', and the preflight then reported both as fine in the same run:
+    #
+    #   OK  Region koreacentral is available to this subscription
+    #   OK  Shared environment cae-… is in UAE North, matching prod's location
+    #
+    # Two sources of truth for one value, disagreeing, with a green tick on
+    # each. --location only sets where the stack RESOURCE is recorded, so the
+    # deployment would still have worked -- which is worse, because the drift
+    # would have survived unnoticed. One source of truth instead.
+    [string] $Location         = '',
     [string] $ResourceGroup    = 'thinkschool-prod-rg',
     [string] $ApiContainerApp  = 'quotes-api-prod',
     [string] $WebContainerApp  = 'quotes-web-prod',
@@ -92,6 +104,16 @@ Set-StrictMode -Version Latest
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 $infra    = Join-Path $repoRoot 'Day7\piece2\infra'
 $paramFile = Join-Path $infra 'main.prod.bicepparam'
+
+if ([string]::IsNullOrWhiteSpace($Location)) {
+    if (-not (Test-Path $paramFile)) { Write-Host "  FAIL  $paramFile not found." -ForegroundColor Red; exit 1 }
+    if ((Get-Content $paramFile -Raw) -match "(?m)^param\s+location\s*=\s*'([^']+)'") {
+        $Location = $Matches[1]
+    } else {
+        Write-Host '  FAIL  main.prod.bicepparam does not set `location`, and none was given.' -ForegroundColor Red
+        exit 1
+    }
+}
 
 function Step ([string] $m) { Write-Host ''; Write-Host $m -ForegroundColor Cyan }
 function Ok   ([string] $m) { Write-Host "  OK    $m" -ForegroundColor Green }
@@ -189,7 +211,7 @@ $loc = Invoke-AzJson @('account', 'list-locations', '--query', "[?name=='$Locati
 if ($null -eq $loc -or @($loc).Count -eq 0) {
     Note "$Location is not in this subscription's location list. Day24/scripts/01-region-fit.ps1 is the check that matters here; policy denial appears at deployment, not now."
 } else {
-    Ok "Region $Location is available to this subscription"
+    Ok "Region $Location (from main.prod.bicepparam) is available to this subscription"
 }
 
 # --- The Container Apps environment quota, which is what actually stopped this ---
