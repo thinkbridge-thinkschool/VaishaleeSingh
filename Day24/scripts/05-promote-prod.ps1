@@ -145,6 +145,9 @@ function Invoke-AzJson {
     try { return $r.Text | ConvertFrom-Json } catch { return $null }
 }
 
+# Set when step 4's recovery seeds the vault, so step 6 does not rotate it.
+$script:secretAlreadySeeded = $false
+
 Write-Host ''
 Write-Host 'Day 24 -- promote dev to prod' -ForegroundColor Cyan
 
@@ -406,21 +409,65 @@ try {
     # easy to get wrong and stays wrong silently until a second item is added.
     $excludedActions = 'Microsoft.Resources/subscriptions/resourceGroups/delete Microsoft.Sql/servers/firewallRules/delete'
 
-    $previous = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        $createOutput = & az stack sub create --name $StackName --location $Location `
-            --template-file infra/main.bicep --parameters infra/main.prod.bicepparam `
-            --action-on-unmanage deleteAll --deny-settings-mode denyDelete `
-            --deny-settings-apply-to-child-scopes `
-            --deny-settings-excluded-actions $excludedActions `
-            --description 'QuotesApi prod - Day 24 promotion' --yes -o none 2>&1
-        $createExit = $LASTEXITCODE
-    } finally { $ErrorActionPreference = $previous }
+    function Invoke-StackCreate {
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $out = & az stack sub create --name $StackName --location $Location `
+                --template-file infra/main.bicep --parameters infra/main.prod.bicepparam `
+                --action-on-unmanage deleteAll --deny-settings-mode denyDelete `
+                --deny-settings-apply-to-child-scopes `
+                --deny-settings-excluded-actions $excludedActions `
+                --description 'QuotesApi prod - Day 24 promotion' --yes -o none 2>&1
+            $code = $LASTEXITCODE
+        } finally { $ErrorActionPreference = $previous }
+        return [pscustomobject]@{ Text = (($out | Out-String).Trim()); ExitCode = $code }
+    }
 
-    if ($createExit -ne 0) {
-        Write-Host (($createOutput | Out-String).Trim())
+    $create = Invoke-StackCreate
+
+    # THE FIRST FAILURE IS THE EXPECTED ONE, AND THIS SCRIPT USED TO DIE ON IT.
+    #
+    # The vault is created empty by design, so the API's revision cannot
+    # resolve its jwt-secret reference and the deployment fails:
+    #
+    #   Field 'configuration.secrets' is invalid ... unable to fetch secret
+    #   'jwt-secret' using Managed identity '.../id-quotes-api-...'
+    #
+    # The header of this script documents that failure as expected and then the
+    # code called Die on it -- so it never reached step 6, which is the cure.
+    # Documenting a deterministic failure and then aborting on it is not
+    # handling it. Seed and retry once, here, where the state is known.
+    if ($create.ExitCode -ne 0 -and
+        ($create.Text -match 'jwt-secret' -or $create.Text -match 'configuration\.secrets')) {
+
+        Note 'Expected first failure: the vault exists but holds no jwt-secret yet.'
+        Note 'Seeding it and retrying the create once.'
+
+        # The stack is in a failed state, so `stack sub show --query outputs`
+        # has nothing to give. The vault is in the resource group either way.
+        $vaultProbe = Invoke-AzText @('keyvault', 'list', '-g', $ResourceGroup, '--query', '[0].name', '-o', 'tsv')
+        if ($vaultProbe.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($vaultProbe.Text)) {
+            Write-Host $create.Text
+            Die "The create failed on the empty vault, but no vault was found in $ResourceGroup to seed."
+        }
+        $seedVault = $vaultProbe.Text.Trim()
+        Ok "Vault to seed: $seedVault"
+
+        & (Join-Path $repoRoot 'Day25\scripts\01-seed-jwt-secret.ps1') `
+            -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -VaultName $seedVault
+        if ($LASTEXITCODE -ne 0) { Die 'Seeding the signing key failed.' }
+        $script:secretAlreadySeeded = $true
+        Ok 'Signing key seeded.'
+
+        $create = Invoke-StackCreate
+    }
+
+    if ($create.ExitCode -ne 0) {
+        Write-Host $create.Text
         Note 'Day25/scripts/show-deploy-error.ps1 walks the nested deployments to find the failed leaf.'
+        Note 'For a preflight rejection there is no nested deployment to walk; use:'
+        Note "  az deployment operation sub list --name <deployment> --query \"[?properties.provisioningState=='Failed'].properties.statusMessage\" -o json"
         Die 'Stack create failed.'
     }
 } finally { Pop-Location }
@@ -459,7 +506,14 @@ Step '6. Seed the JWT signing key into prod''s vault'
 # ===========================================================================
 # A SEPARATE KEY FROM DEV, and this is not tidiness. One signing key across
 # both environments means a token issued by dev is accepted by production.
-if ([string]::IsNullOrWhiteSpace($vaultName)) {
+#
+# SKIPPED IF STEP 4 ALREADY SEEDED IT. Re-running the seed script is a
+# ROTATION, not an idempotent write: it generates a new key and every token
+# signed with the old one stops validating. Running it twice in one promotion
+# would invalidate the key the deployment just succeeded with.
+if ($script:secretAlreadySeeded) {
+    Ok 'Already seeded during step 4; not re-running (a re-run rotates the key).'
+} elseif ([string]::IsNullOrWhiteSpace($vaultName)) {
     Note 'No vault name; skipping. Run Day25/scripts/01-seed-jwt-secret.ps1 by hand.'
 } else {
     & (Join-Path $repoRoot 'Day25\scripts\01-seed-jwt-secret.ps1') `
