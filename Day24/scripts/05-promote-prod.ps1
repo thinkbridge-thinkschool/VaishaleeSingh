@@ -310,21 +310,25 @@ try {
     # own deny assignment blocks the stack's own deletion of the previous
     # SQL firewall rule, and every later update reports `failed` with
     # DenyAssignmentAuthorizationFailed while orphan rules accumulate.
-    # CALLED DIRECTLY, NOT THROUGH Invoke-AzText, AND THAT IS THE POINT.
+    # THE EXCLUDED ACTIONS GO AS ONE QUOTED, SPACE-SEPARATED STRING.
     #
-    # Invoke-AzText splats a PowerShell array into az. That is fine for every
-    # other call in this script and wrong for this one:
-    # --deny-settings-excluded-actions takes MULTIPLE values, and splatted
-    # through az.bat only the first bound to the flag while the second became
-    # a positional argument:
+    # This took two wrong fixes. Passed as two arguments -- whether splatted
+    # through a helper or written out with backtick continuation -- only the
+    # first bound to the flag and the second became a positional:
     #
     #   ERROR: unrecognized arguments: Microsoft.Sql/servers/firewallRules/delete
     #
-    # 02-deploy-dev.ps1 passes this flag by direct invocation with backtick
-    # continuation and has always worked, so that is the proven form and this
-    # matches it rather than inventing a third one. The exit code is still read
-    # explicitly, because a helper that hides it is how this script's sibling
-    # reported a failed query as "no rows".
+    # I blamed the splatting helper, then blamed the call style. Both were
+    # guesses. `az stack sub create --help` settles it, in an example rather
+    # than in the parameter description:
+    #
+    #   --deny-settings-excluded-principals "test1 test2"
+    #
+    # The list is ONE value containing spaces, not several values. Every
+    # example in that help passes a single item, which is why the shape is
+    # easy to get wrong and stays wrong silently until a second item is added.
+    $excludedActions = 'Microsoft.Resources/subscriptions/resourceGroups/delete Microsoft.Sql/servers/firewallRules/delete'
+
     $previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
@@ -332,9 +336,7 @@ try {
             --template-file infra/main.bicep --parameters infra/main.prod.bicepparam `
             --action-on-unmanage deleteAll --deny-settings-mode denyDelete `
             --deny-settings-apply-to-child-scopes `
-            --deny-settings-excluded-actions `
-                'Microsoft.Resources/subscriptions/resourceGroups/delete' `
-                'Microsoft.Sql/servers/firewallRules/delete' `
+            --deny-settings-excluded-actions $excludedActions `
             --description 'QuotesApi prod - Day 24 promotion' --yes -o none 2>&1
         $createExit = $LASTEXITCODE
     } finally { $ErrorActionPreference = $previous }

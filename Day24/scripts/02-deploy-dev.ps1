@@ -190,6 +190,13 @@ try {
     $env:SQL_CLIENT_IP = (Invoke-RestMethod https://api.ipify.org).Trim()
     Ok "This machine will be allowed through the SQL firewall."
 
+    # ONE QUOTED STRING, NOT TWO ARGUMENTS. az takes this list as a single
+    # space-separated value -- see the `--deny-settings-excluded-principals
+    # "test1 test2"` example in `az stack sub create --help`. Written as two
+    # arguments, only the first binds and the second is rejected as a
+    # positional: "unrecognized arguments: Microsoft.Sql/servers/...". This
+    # call had that shape and had never been exercised with a SECOND action,
+    # which is why it looked fine; the prod promotion hit it immediately.
     # --deny-settings-excluded-actions is the CLI half of the excludedActions
     # list in azure.yaml, and it is NOT optional. Without it the stack's own
     # deny assignment blocks the stack's own deletion of the previous
@@ -202,8 +209,7 @@ try {
             --action-on-unmanage deleteAll --deny-settings-mode denyDelete `
             --deny-settings-apply-to-child-scopes `
             --deny-settings-excluded-actions `
-                'Microsoft.Resources/subscriptions/resourceGroups/delete' `
-                'Microsoft.Sql/servers/firewallRules/delete' `
+                'Microsoft.Resources/subscriptions/resourceGroups/delete Microsoft.Sql/servers/firewallRules/delete' `
             --description 'QuotesApi dev - Day 24' --yes -o none
     }
     Ok 'Stack created.'
