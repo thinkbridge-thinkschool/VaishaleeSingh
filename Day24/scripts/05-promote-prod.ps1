@@ -192,6 +192,61 @@ if ($null -eq $loc -or @($loc).Count -eq 0) {
     Ok "Region $Location is available to this subscription"
 }
 
+# --- The Container Apps environment quota, which is what actually stopped this ---
+#
+# THIS CHECK EXISTS BECAUSE EVERY OTHER PREFLIGHT PASSED AND THE DEPLOYMENT
+# FAILED ANYWAY. The region checks above answer "does this region exist for
+# this subscription" and "is this region permitted by policy". Neither answers
+# the question that mattered:
+#
+#   MaxNumberOfGlobalEnvironmentsInSubExceeded
+#   The subscription cannot have more than 1 Container App Environments.
+#
+# One per SUBSCRIPTION, not one per region -- and main.bicep's own description
+# said "per region", which is what led main.prod.bicepparam to ask for a second
+# environment in a second region and expect that to work. A quota is not
+# avoided by deploying somewhere else.
+#
+# It costs one list call, it is read-only, and it would have saved a create
+# that reached Azure, built a resource group and then rolled back.
+$envs = Invoke-AzJson @('containerapp', 'env', 'list', '--query',
+                        '[].{name:name, rg:resourceGroup, location:location}', '-o', 'json')
+if ($null -eq $envs) {
+    Note 'Could not list Container Apps environments; skipping the quota check.'
+} else {
+    $envList = @($envs)
+    foreach ($e in $envList) { Ok "Existing environment: $($e.name) in $($e.rg) ($($e.location))" }
+
+    if ($paramText -match "(?m)^param\s+createContainerAppsEnvironment\s*=\s*true" -and $envList.Count -ge 1) {
+        Note 'Prod asks to CREATE an environment and one already exists.'
+        Note 'This subscription allows exactly one in total, so the deployment'
+        Note 'will fail at preflight with MaxNumberOfGlobalEnvironmentsInSubExceeded'
+        Note 'after creating the resource group. Set in main.prod.bicepparam:'
+        Note '  param createContainerAppsEnvironment = false'
+        Note "  param containerAppsEnvironmentName = '$($envList[0].name)'"
+        Note "  param containerAppsEnvironmentResourceGroup = '$($envList[0].rg)'"
+        Die 'Prod would ask for a second Container Apps environment.'
+    }
+
+    # SHARING AN ENVIRONMENT PINS THE REGION. Container apps run in their
+    # environment's region, so prod's data resources must be in that region too
+    # or every request becomes a cross-region round trip to its own database.
+    if ($paramText -match "(?m)^param\s+containerAppsEnvironmentName\s*=\s*'([^']+)'") {
+        $sharedName = $Matches[1]
+        $shared = $envList | Where-Object { $_.name -eq $sharedName }
+        if ($null -eq $shared) {
+            Die "main.prod.bicepparam references environment '$sharedName', which does not exist. Existing: $(($envList | ForEach-Object { $_.name }) -join ', ')."
+        }
+        $sharedRegion = ($shared.location -replace '\s', '').ToLower()
+        $prodRegion = ''
+        if ($paramText -match "(?m)^param\s+location\s*=\s*'([^']+)'") { $prodRegion = $Matches[1].ToLower() }
+        if ($sharedRegion -ne $prodRegion) {
+            Die "Prod's location is '$prodRegion' but the shared environment '$sharedName' is in '$($shared.location)'. Container apps run in their environment's region, so prod's SQL, Service Bus and vault would sit in a different region from its own apps."
+        }
+        Ok "Shared environment $sharedName is in $($shared.location), matching prod's location"
+    }
+}
+
 # --- Resolve each app's tag from what dev is running, then verify it ---
 function Get-RunningTag {
     param([Parameter(Mandatory)] [string] $DevApp)

@@ -180,7 +180,7 @@ param logDailyQuotaGb int = -1
 // Container Apps Environment
 // ---------------------------------------------------------------------------
 
-@description('Create a dedicated environment, or reuse an existing one. Dev reuses thinkschool-env because this subscription permits exactly one environment per region.')
+@description('Create a dedicated environment, or reuse an existing one. This subscription permits exactly ONE Container Apps environment in TOTAL -- not one per region, which is what this description used to say and what led prod to ask for a second one in koreacentral. It was refused at preflight with MaxNumberOfGlobalEnvironmentsInSubExceeded. So exactly one environment exists and every environment of this app shares it.')
 param createContainerAppsEnvironment bool = false
 
 @description('Name of the environment to create or reference.')

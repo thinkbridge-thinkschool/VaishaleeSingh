@@ -83,13 +83,30 @@ param quotesApiExists = false
 //   2. Tear the dev stack down first, deploy prod, verify, tear prod down, then
 //      recreate dev. Sound only because prod is torn down anyway (see the
 //      header) and because the stack makes both teardowns clean.
-// koreacentral — a DIFFERENT region from dev's uaenorth, and that is the point.
-// createContainerAppsEnvironment is true in both files, so a shared region would
-// put two Container Apps Environments in one place and risk the one-per-region
-// limit the old subscription enforced. Two regions sidesteps a constraint that
-// has not been measured here rather than discovering it mid-deployment.
-// Also mature, unlike the two Southeast Asian alternatives.
-param location = 'koreacentral'
+// uaenorth -- THE SAME REGION AS DEV, and this reverses a decision along with
+// the reasoning that produced it.
+//
+// This used to be koreacentral, deliberately different from dev, and the
+// comment here said two regions "sidesteps a constraint that has not been
+// measured here rather than discovering it mid-deployment". The constraint was
+// then discovered mid-deployment, because it was not the constraint this file
+// guessed at: the limit is ONE Container Apps environment per SUBSCRIPTION,
+// not per region. Prod asked for a second one in koreacentral and was refused
+// at preflight:
+//
+//   MaxNumberOfGlobalEnvironmentsInSubExceeded
+//   The subscription cannot have more than 1 Container App Environments.
+//
+// Avoiding an unmeasured constraint by guessing at its shape is not avoiding
+// it. Measuring it costs one command -- `az containerapp env list` -- and that
+// check is now in 05-promote-prod.ps1's preflight.
+//
+// So prod shares dev's environment (below), and container apps must live in
+// the same region as their environment. Keeping koreacentral would put prod's
+// SQL, Service Bus and vault in Korea while its apps ran in the UAE, making
+// every request a cross-region round trip to its own database. One region for
+// everything is the correct answer once the environment is shared.
+param location = 'uaenorth'
 
 // --- Key Vault -----------------------------------------------------------
 // This file used to say: "A production signing key belongs in a vault, and the
@@ -166,9 +183,28 @@ param logRetentionInDays = 90
 param logDailyQuotaGb = -1
 
 // --- Container Apps Environment ------------------------------------------
-// A dedicated environment, unlike dev. See the note on `location` above for the
-// quota interaction this creates.
-param createContainerAppsEnvironment = true
+// SHARED WITH DEV, AND THIS IS A COMPROMISE THE SUBSCRIPTION IMPOSED RATHER
+// THAN A DESIGN CHOICE.
+//
+// This subscription permits exactly one Container Apps environment in total.
+// Dev holds it. So prod cannot have its own, and the honest description of
+// prod here is: separate in every way except the one thing that could not be
+// separated.
+//
+//   Separate: resource group, Azure SQL server and database, Service Bus
+//             namespace, Key Vault, container registry, both container apps,
+//             the managed identity, the Entra app registration, the Log
+//             Analytics workspace, and the alert rule.
+//   Shared:   the Container Apps environment -- so its network and its
+//             system-level logging.
+//
+// What that costs is real and worth stating rather than glossing: prod's app
+// traffic traverses infrastructure dev also uses, and a change to the shared
+// environment affects both. On a subscription that allowed two environments
+// this parameter would be true.
+param createContainerAppsEnvironment = false
+param containerAppsEnvironmentName = 'cae-7mo4cimyk4vnk'
+param containerAppsEnvironmentResourceGroup = 'thinkschool-dev-rg'
 
 // --- API ------------------------------------------------------------------
 // CHANGED ON DAY 24. Day 23 specified maxReplicas 10 at 1.0 vCPU — a ten-vCPU
