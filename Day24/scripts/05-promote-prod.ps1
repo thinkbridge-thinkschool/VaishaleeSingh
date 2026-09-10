@@ -467,7 +467,8 @@ try {
         Write-Host $create.Text
         Note 'Day25/scripts/show-deploy-error.ps1 walks the nested deployments to find the failed leaf.'
         Note 'For a preflight rejection there is no nested deployment to walk; use:'
-        Note "  az deployment operation sub list --name <deployment> --query \"[?properties.provisioningState=='Failed'].properties.statusMessage\" -o json"
+        Note '  az deployment operation sub list --name <deployment> --query [?properties.provisioningState==FAILED].properties.statusMessage -o json'
+        Note '  (quote the --query value in your shell, and use single quotes around Failed)'
         Die 'Stack create failed.'
     }
 } finally { Pop-Location }
