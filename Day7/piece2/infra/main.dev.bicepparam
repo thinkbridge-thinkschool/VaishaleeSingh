@@ -107,47 +107,64 @@ param quotesApiExists = true
 // indiasouthcentral is permitted by policy but offers no Container Apps at all.
 param location = 'uaenorth'
 
-// The signing key is read from the environment at compile time, never written
-// into this file.
+// --- Key Vault -----------------------------------------------------------
+// THE SIGNING KEY IS NO LONGER HERE, AND NOTHING REPLACED IT.
 //
-// The empty-string fallback is deliberate, and it is not a default value: it
-// exists so this file compiles for someone who has merely OPENED it. Two
-// stricter spellings were tried first and both fail at compile time rather
-// than at deploy time:
-//   readEnvironmentVariable('JWT_SECRET')      -> BCP427 when the var is unset
-//   ... with @minLength(32) on the parameter   -> BCP333, because Bicep checks
-//                                                 length here, not at deploy
+// This file used to carry `param jwtSecret = readEnvironmentVariable(...)`,
+// with a long comment about why the empty-string fallback had to exist for the
+// file to compile at all. All of that was scaffolding around one decision:
+// that the value would travel through the template. Day 25 reversed that
+// decision, so the scaffolding went with it.
 //
-// Empty is still not deployable. modules/api.bicep declares @minLength(32) on
-// the parameter that actually consumes this, and ARM validates that at
-// deployment — so a deploy without JWT_SECRET set is rejected before a single
-// resource is touched. Fail at deploy, not at open.
+// The value now goes operator -> vault, once, via
+// Day25/scripts/01-seed-jwt-secret.ps1. Nothing in this repository ever holds
+// it, JWT_SECRET no longer needs to be exported to deploy, and it should be
+// removed from the azd environment (.azure/thinkschool-dev/.env), where it is
+// currently sitting in plain text.
 //
-// It cannot be passed as `-p jwtSecret=...` alongside this file: az refuses to
-// mix a .bicepparam with inline parameter overrides. Set the variable instead:
-//   $env:JWT_SECRET = '<at least 32 characters>'
-//
-// USE A NEW KEY. Not the literal that is still in this repository's git
-// history, and not the one the old subscription's app was issuing tokens with —
-// a subscription cutover is the right moment to invalidate every outstanding
-// token rather than carry them across.
-param jwtSecret = readEnvironmentVariable('JWT_SECRET', '')
+// Purge protection OFF here. Not an oversight and not laziness: this stack is
+// torn down and recreated, actionOnUnmanage is deleteAll, and a purge-protected
+// vault reserves its name for up to 90 days after deletion — so leaving it on
+// would make the NEXT deployment fail on a name it cannot reuse, reported as a
+// conflict rather than as anything mentioning purge protection.
+param keyVaultPurgeProtection = false
+param keyVaultSoftDeleteRetentionInDays = 7
 
 // --- Entra ID ------------------------------------------------------------
-// Unchanged, and pointing at the OLD tenant — see the header. Still unresolved
-// and still stated rather than guessed: appsettings.json declares
-// AzureAd:Audience as 'api://quotes-api/access'; the app that ran in the old
-// subscription used 'api://91566dbd-d857-488a-858d-475e60b309b7', the
-// app-ID-URI form. They cannot both be right. Ask the directory, which is still
-// reachable:
+// Registered in the Amity tenant on Day 25 by
+// Day25/scripts/02-entra-app-registrations.ps1, which also wrote the three
+// values below. Before that they named tenant f774bb68-… and app 91566dbd-…,
+// in the OLD subscription's directory — which worked, because validating a
+// token is an HTTPS call to an authority URL and has nothing to do with which
+// tenant owns the subscription, and that is exactly why it survived a
+// subscription migration unnoticed.
 //
-//   az login --tenant f774bb68-0575-4cd2-9d4c-3b4e593d1110 --allow-no-subscriptions
-//   az ad app show --id 91566dbd-d857-488a-858d-475e60b309b7 \
-//     --query "{uris:identifierUris, scopes:api.oauth2PermissionScopes[].value}"
+// AND THE AUDIENCE WAS WRONG THE WHOLE TIME. This file used to call it an open
+// question: appsettings.json declares 'api://quotes-api/access' while the old
+// app used the app-ID-URI form, and they cannot both be right. They are not.
+// Entra issues an access token whose `aud` claim is the RESOURCE'S APPLICATION
+// ID URI — api://<appId> — and carries the scope separately in `scp`. The old
+// value was a scope, so the EntraId scheme would have rejected every genuine
+// Entra token handed to it.
 //
-// A token whose audience does not match is rejected, so getting this wrong
-// disables the Entra scheme — it does not weaken it.
-param azureAdAudience = 'api://quotes-api/access'
+// Nothing caught it because nothing had sent one: the SPA signs in against the
+// app's own CustomJwt endpoints, so the second scheme has never been exercised
+// in anger. A dead code path is not a correct one.
+//
+// These are directory identifiers, not secrets. A tenant id and a client id
+// identify an application publicly; neither registration has a client secret,
+// and neither needs one — the SPA is a public client using PKCE and the API
+// only ever validates tokens. The companion SPA registration is
+// e2255607-dc83-4747-9623-b73cc24ff62c, unused until the front end moves to
+// MSAL.
+param azureAdTenantId = '8d46a076-d093-416d-a57b-8692cde13bf8'
+param azureAdClientId = '18920fc7-79a5-42f0-bf65-c101749dd79b'
+
+// api://<appId>, the Application ID URI -- NOT the scope. Entra puts the
+// resource's app ID URI in the token's aud claim and carries the scope
+// separately in scp, so the previous value ('api://quotes-api/access') would
+// have failed audience validation on every genuine token.
+param azureAdAudience = 'api://18920fc7-79a5-42f0-bf65-c101749dd79b'
 
 // --- Observability -------------------------------------------------------
 // 30 days is the included, no-extra-cost retention. The 1 GB/day cap is a cost

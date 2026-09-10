@@ -1,0 +1,176 @@
+Day 25 -- smoke test after the zero-secrets change
+Run at: 2026-09-09 (dev, thinkschool-dev-rg, uaenorth)
+
+$api = "https://quotes-api-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io"
+curl.exe -s -o NUL -w "live  %{http_code}\n" --max-time 120 "$api/health/live"
+curl.exe -s -w "`nready %{http_code}\n" --max-time 120 "$api/health/ready"
+
+live  200
+{"service":"QuotesApi","status":"Healthy","totalDurationMs":4.39,"checks":[{"name":"database","status":"Healthy","durationMs":3.59,"error":false}]}
+ready 200
+
+WHY THIS IS THE END-TO-END IDENTITY PROOF, AND NOT JUST AN UPTIME CHECK.
+
+A zero-secrets result achieved by breaking the application is not a pass, so
+the proof script's 13/0 needs this beside it. One 200 from /health/ready
+establishes both halves of the identity story at once:
+
+  * THE APP BOOTED, which means the Key Vault reference resolved. Jwt:Secret
+    is bound through AddOptions<JwtOptions>().ValidateDataAnnotations()
+    .ValidateOnStart() with [Required] and [MinLength(32)], so a missing or
+    truncated value is a startup failure, not a later 500. A running process
+    is therefore evidence that the app's managed identity authenticated to
+    kv-7mo4cimyk4vnk and read a real key -- no assertion in the proof script
+    could establish that as directly.
+
+  * THE DATABASE CHECK PASSED, which means EF Core opened a connection to
+    sql-quotes-7mo4cimyk4vnk over the managed identity. The server is
+    azureADOnlyAuthentication, so there is no password path that could have
+    produced this result: 3.59ms of Healthy is a token being accepted.
+
+Service Bus was not exercised by the health probe, so it was not claimed here
+at first -- the container logs below settle it directly.
+
+FRONT END
+---------
+curl.exe -s -o NUL -w "web %{http_code}" https://quotes-web-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io/
+
+web 200
+
+Checked separately because the front end is a second container app with its own
+image, and the Day 25 changes reached it in ways easy to overlook: the registry
+admin user it had never used was disabled, and the stack redeployed it twice.
+It holds no secrets of its own (asserted in no-secrets-AFTER.txt), pulls from
+the registry with the same managed identity as the API, and takes API_BASE_URL
+as plain configuration -- so a 200 here confirms the identity-only pull still
+works, which is the one thing disabling the admin user could plausibly have
+broken.
+
+SERVICE BUS AND THE IDENTITY SELECTION, FROM THE CONTAINER'S OWN LOG
+--------------------------------------------------------------------
+az containerapp logs show -n quotes-api-dev -g thinkschool-dev-rg --tail 100
+
+  Managed Identity source selected: AppService with ID:
+      ClientId d9d18fa7-d4cf-4432-98b5-f1d2f544104a
+  ManagedIdentityCredential.GetToken succeeded.
+      Scopes: [ https://servicebus.azure.net/.default ]
+  DefaultAzureCredential credential selected: Azure.Identity.ManagedIdentityCredential
+  Receive link created for Identifier:
+      quote-events/Subscriptions/search-index-...-Receiver
+  Receive link created for Identifier:
+      quote-events/Subscriptions/audit-...-Receiver
+  ReceiveBatchAsync done. Received '0' messages.
+
+Two claims, both settled by that.
+
+AZURE_CLIENT_ID IS DOING ITS JOB. The credential names client id
+d9d18fa7-..., which is id-quotes-api-7mo4cimyk4vnk, rather than picking by
+precedence. Before Day 25 that variable was unset and resolution worked only
+because exactly one identity happened to be attached.
+
+SERVICE BUS AUTHENTICATES BY IDENTITY. A token for servicebus.azure.net was
+issued and AMQP receive links were then established on both subscriptions of a
+namespace whose disableLocalAuth is true. A SAS connection string could not
+have produced this, because the namespace rejects them. "Received 0 messages"
+is the correct result for an idle topic and is not a failure.
+
+APPLICATION INSIGHTS -- RESOLVED. EXPORT WORKS; THE WORKSPACE IS OVER QUOTA
+---------------------------------------------------------------------------
+Every query returned zero rows, which looked exactly like the failure mode the
+Day 25 change could have caused: DisableLocalAuth on, the exporter refused,
+telemetry silently gone. It was not that. The seven-day query settled it --
+
+  requests | where timestamp > ago(7d) | summarize count() by bin(timestamp, 1d)
+  (no rows)
+
+-- because it covers Day 24, when local auth was still enabled and the
+instrumentation key alone was sufficient. Telemetry had never arrived in this
+subscription, so the Day 25 change cannot be what stopped it.
+
+What is actually happening:
+
+  az monitor log-analytics workspace show -g thinkschool-dev-rg -n log7mo4cimyk4vnk
+    { "cap": 1.0, "status": "OverQuota", "nextReset": "2026-09-09T09:00:00Z" }
+
+  Usage | where TimeGenerated > ago(24h) | summarize GB=sum(Quantity)/1024 by DataType
+    ContainerAppConsoleLogs_CL   0.976
+    AppTraces                    0.832
+    AppExceptions                0.758
+    AppDependencies              0.002
+    AppRequests                  0.0000081
+
+Roughly 2.6 GB offered against a 1 GB/day cap (logDailyQuotaGb = 1 in
+main.dev.bicepparam, a deliberate cost guard on a student credit). A capped
+workspace DROPS ingestion once the cap is hit, so every query after that point
+returns nothing -- including the ones run to verify Day 25.
+
+AND THIS IS THE PROOF THE IDENTITY PATH WORKS. AppTraces and AppExceptions
+took 0.83 GB and 0.76 GB in twenty-four hours. That data was ingested by a
+component whose DisableLocalAuth is true, from an app whose only credential is
+a managed identity. Ingestion at that volume is not possible unless the
+Monitoring Metrics Publisher grant, the AZURE_CLIENT_ID selection and
+options.Credential on UseAzureMonitor are all correct. The zero-row queries
+were an artefact of the quota, not evidence about authentication.
+
+THREE THINGS THIS EXPOSED, none of them created by Day 25:
+
+  1. The log volume is not a choice anyone made. MSAL writes a dozen INFO
+     lines per token acquisition and the Service Bus receivers log
+     ReceiveBatchAsync start/done for both subscriptions every 60 seconds
+     forever. Serilog is shipping those at Information level.
+  2. THE SAME NOISE IS PAID FOR TWICE. ContainerAppConsoleLogs_CL is the
+     container's stdout; AppTraces is largely the same lines again, exported
+     through Serilog into App Insights. Together they are 1.8 of the 2.6 GB.
+  3. AppExceptions AT 0.76 GB/DAY IS ITS OWN DEFECT. Something throws
+     continuously, and the quota has been swallowing the evidence -- an
+     exception loop nobody could see because the telemetry that would show it
+     was being dropped. Tracked separately; it is not an identity problem and
+     is not in Day 25's scope.
+
+The cap did its job: it stopped a runaway log bill on a $100 twelve-month
+credit. Raising it would buy silence, not correctness. The fix is the
+verbosity and the exceptions, in that order.
+
+WHAT THE 0.76 GB OF EXCEPTIONS ACTUALLY WERE
+---------------------------------------------
+  AppExceptions | summarize n=count() by ProblemId, OuterMessage
+
+    ManagedIdentityCredential authentication failed: [Managed Identity]
+    Error Message: Unable to load the proper Managed Identity.
+    Azure.Identity.AuthenticationFailedException
+
+  AppExceptions | summarize n=count() by bin(TimeGenerated, 1h)
+    2026-09-08T12:00:00Z    28308        <- one hour, and no other
+
+  AppExceptions | summarize n=count() by OperationName, Method
+    Azure.Identity.MsalManagedIdentityClient
+        +<AcquireTokenForManagedIdentityAsyncCore>d__31.MoveNext   28308
+
+28,308 failures in a single hour -- about eight per second -- all of them the
+same thing: a credential unable to work out WHICH user-assigned identity to
+present. That is precisely the condition AZURE_CLIENT_ID removes.
+
+Phase 1 called that variable "a latent defect", on the reasoning that
+resolution worked "only because exactly one identity happens to be attached".
+That was too generous. It was not latent. It was failing in a retry loop, and
+the quota it helped exhaust was hiding the evidence -- the telemetry that
+would have shown the problem was the telemetry being dropped.
+
+WHAT IS AND IS NOT PROVEN, because the two are easy to conflate here.
+
+  Proven: managed identity acquisition works NOW. Today's container log shows
+  ManagedIdentityCredential.GetToken succeeded for servicebus.azure.net and
+  for monitor.azure.com, with "Managed Identity source selected: AppService
+  with ID: ClientId d9d18fa7-..." -- named, not guessed. SQL health checks
+  pass and the Key Vault reference resolves, both over the same identity.
+
+  NOT proven: that AZURE_CLIENT_ID is what stopped the loop. The failures sit
+  in one hour on 8 September and nothing appears after it -- but nothing at
+  all appears after it, because that burst is part of what pushed the
+  workspace OverQuota and ingestion stopped. Absence of later exceptions is
+  the quota, not evidence. The app was also restarted and redeployed several
+  times in between, so more than one thing changed.
+
+  The clean test is a window with ingestion working: after the quota resets at
+  2026-09-09T09:00:00Z, query AppExceptions again. Zero over a period with
+  live ingestion settles it; anything else names the real cause.

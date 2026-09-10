@@ -77,19 +77,21 @@ Step 'Preconditions'
 az account set --subscription $SubscriptionId | Out-Null
 Ok "Subscription $SubscriptionId"
 
-# The signing key must be the SAME value the stack last deployed, or the
-# container's jwt-secret changes and every token already issued stops
-# validating. There is no way to read it back -- it is @secure() -- so if the
-# shell has lost it, a new one is generated and that consequence is stated
-# rather than hidden.
-if (-not $env:JWT_SECRET -or $env:JWT_SECRET.Length -lt 32) {
-    $env:JWT_SECRET = [Convert]::ToBase64String((1..48 | ForEach-Object { Get-Random -Maximum 256 }))
-    Note 'JWT_SECRET was not set in this shell, so a NEW random key was generated.'
-    Note 'Any token issued by the currently deployed app will stop validating. No data is'
-    Note 'affected. To avoid this next time, set $env:JWT_SECRET before running.'
-} else {
-    Ok "Reusing the JWT_SECRET in this shell ($($env:JWT_SECRET.Length) chars)."
-}
+# DAY 25 REMOVED THE SIGNING KEY FROM THIS SCRIPT.
+#
+# This block used to generate a JWT_SECRET and pass it into the deployment,
+# because modules/api.bicep took the key as a @secure() parameter. It no
+# longer does: the key lives in Key Vault, the container app holds a Key Vault
+# REFERENCE, and the value is written straight to the vault by
+# Day25/scripts/01-seed-jwt-secret.ps1.
+#
+# Deleting this is not tidying. Left in place it would keep writing the secret
+# into the azd environment file on this machine, which is one of the four
+# copies Day 25 exists to get rid of -- and it generated the key with
+# Get-Random, a seeded pseudo-random source with no business producing a
+# signing key.
+#
+# Nothing needs to be exported before running this script any more.
 
 $env:SQL_CLIENT_IP = (Invoke-RestMethod https://api.ipify.org).Trim()
 Ok "This machine: $env:SQL_CLIENT_IP"

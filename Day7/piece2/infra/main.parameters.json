@@ -26,9 +26,6 @@
     "quotesApiImageName": {
       "value": "${SERVICES_QUOTES_API_IMAGE_NAME}"
     },
-    "jwtSecret": {
-      "value": "${JWT_SECRET}"
-    },
     "sqlEntraAdminObjectId": {
       "value": "${AZURE_PRINCIPAL_ID}"
     },

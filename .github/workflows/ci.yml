@@ -263,19 +263,17 @@ jobs:
       # template it `using`s, so a parameter that was renamed or removed fails
       # here. The old main.parameters.json would have accepted the same typo in
       # silence and surfaced it as a deployment error.
-      # JWT_SECRET is read by readEnvironmentVariable() at COMPILE time. The
-      # parameter files fall back to an empty string when it is unset, so these
-      # steps would pass without it -- it is set anyway so CI compiles the same
-      # shape a real deployment does rather than the fallback path. The value is
-      # a throwaway that signs nothing and reaches no environment.
+      # These steps used to set a throwaway JWT_SECRET, because the parameter
+      # files read it with readEnvironmentVariable() at COMPILE time. Day 25
+      # deleted that parameter -- the signing key is a Key Vault reference now
+      # and no longer travels through the template -- so the variable fed
+      # nothing. Removed rather than left: an unused secret-shaped variable in
+      # CI is exactly the sort of thing that gets copied into a job where it
+      # does matter.
       - name: Type-check the dev parameter file
-        env:
-          JWT_SECRET: ci-only-throwaway-signing-key-not-used-anywhere-else
         run: az bicep build-params --file Day7/piece2/infra/main.dev.bicepparam --outfile /dev/null
 
       - name: Type-check the prod parameter file
-        env:
-          JWT_SECRET: ci-only-throwaway-signing-key-not-used-anywhere-else
         run: az bicep build-params --file Day7/piece2/infra/main.prod.bicepparam --outfile /dev/null
 
       # No `what-if` here: it needs a subscription and credentials this
