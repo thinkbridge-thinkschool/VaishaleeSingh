@@ -1,0 +1,44 @@
+// Day 26 — p50/p95/p99 by endpoint.
+//
+// THREE THINGS IN HERE ARE NOT DECORATION, and a query without them reads
+// convincingly while being wrong.
+//
+// 1. HEALTH PROBES ARE EXCLUDED. Container Apps calls /health/live and
+//    /health/ready every 10 seconds per replica, forever. They are the
+//    fastest endpoints in the app and, on anything but heavy traffic, the
+//    most numerous by an order of magnitude — so leaving them in drags every
+//    aggregate toward "everything is fast" and buries the endpoints a user
+//    actually waits on. They are excluded here rather than filtered by the
+//    reader afterwards, because a number that is quietly wrong is worse than
+//    one that is missing.
+//
+// 2. THE REQUEST COUNT IS SHOWN NEXT TO THE PERCENTILE. A p99 over four
+//    requests is the slowest of four requests. It is not a tail latency and
+//    treating it as one produces confident nonsense. The `requests >= 5`
+//    floor removes the worst of it; the column is there so the reader can
+//    judge the rest.
+//
+// 3. sum(ItemCount), NOT count(). Application Insights sampling drops
+//    events and records the multiplier in ItemCount — one stored row can
+//    represent ten real requests. count() counts rows and silently
+//    under-reports as soon as sampling turns on. Sampling is off in this
+//    deployment today, which is exactly why it is easy to write count() and
+//    not notice for months.
+//
+// Name is the ROUTE TEMPLATE ("GET /api/quotes/{id}"), not the raw URL, so
+// /api/quotes/1 and /api/quotes/2 aggregate. Grouping by URL instead is the
+// classic cardinality explosion: thousands of one-request groups, no signal.
+AppRequests
+| where TimeGenerated > ago(24h)
+| where Name !startswith "GET /health"
+| summarize
+    requests = sum(ItemCount),
+    p50      = round(percentile(DurationMs, 50), 1),
+    p95      = round(percentile(DurationMs, 95), 1),
+    p99      = round(percentile(DurationMs, 99), 1),
+    failures = sumif(ItemCount, Success == false)
+    by Endpoint = Name
+| extend failureRatePct = round(100.0 * failures / requests, 2)
+| where requests >= 5
+| project Endpoint, requests, p50, p95, p99, failures, failureRatePct
+| order by p99 desc

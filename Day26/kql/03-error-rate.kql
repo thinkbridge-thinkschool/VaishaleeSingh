@@ -1,0 +1,35 @@
+// Day 26 — error rate over a five-minute window. This is the ALERT query.
+//
+// THE MINIMUM-VOLUME FLOOR IS THE WHOLE DESIGN, and without it this alert
+// gets muted within a week.
+//
+// quotes-api-dev runs at minReplicas 0 and sees almost no traffic. In a
+// five-minute window with two requests, one failure is a 50% error rate.
+// Every deploy, every cold start, every probe of a scaled-to-zero app would
+// page someone. An alert that cries wolf is worse than no alert: it trains
+// the person receiving it to ignore the one that matters, and it does so
+// quietly.
+//
+// So the query returns NO ROWS below MinRequests, and a scheduled query rule
+// with no rows does not fire. The threshold is deliberately expressed as data
+// rather than hidden in the rule's configuration, so anyone reading the query
+// can see the condition without opening the alert in the portal.
+//
+// Health probes are excluded for the same reason as in 01: they are the bulk
+// of the traffic and they always succeed, so including them would dilute a
+// real error rate to below any threshold worth setting. This makes the alert
+// STRICTER, not weaker — the floor is measured against real traffic only.
+//
+// The rule thresholds on the errorRatePct column (metricMeasureColumn), so
+// the query returning a row is not by itself the alert condition.
+let LookbackMinutes = 5;
+let MinRequests     = 20;    // below this, the ratio is noise
+AppRequests
+| where TimeGenerated > ago(LookbackMinutes * 1m)
+| where Name !startswith "GET /health"
+| summarize
+    total  = sum(ItemCount),
+    failed = sumif(ItemCount, Success == false)
+| where total >= MinRequests
+| extend errorRatePct = round(100.0 * failed / total, 2)
+| project errorRatePct, total, failed

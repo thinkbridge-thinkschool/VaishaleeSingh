@@ -1,0 +1,48 @@
+// Day 26 — does one operation actually span API, worker and database?
+//
+// WHAT THIS IS PROVING, and why the pieces existing is not the same as it
+// working. QuotesApi publishes to Service Bus and consumes from it in hosted
+// services, so the write path crosses an asynchronous boundary:
+//
+//   HTTP request -> SQL write -> outbox -> Service Bus publish
+//        ... later, in the consumer ...
+//   Service Bus receive -> handler -> SQL write
+//
+// Nothing about that is automatic. A trace survives the hop only because
+// ServiceBusQuoteEventPublisher writes Activity.Current.Id into
+// ApplicationProperties["traceparent"], and QuoteEventProcessorService reads
+// it back and calls activity.SetParentId(traceparent). Miss either half and
+// you get two unrelated traces that look completely healthy on their own —
+// which is the failure this query exists to rule out.
+//
+// The consumer span arrives as an AppRequest, not a dependency: Azure Monitor
+// maps a span of kind Consumer to a request, because from the worker's point
+// of view receiving a message IS the incoming operation. So a correctly
+// stitched write shows TWO AppRequests under one OperationId — the HTTP call
+// and the message handling — which looks like double-counting until you know
+// to expect it.
+//
+// Candidates are picked by looking for operations that touched Service Bus,
+// because those are the only ones that crossed the boundary at all. A GET
+// never leaves the API and would prove nothing.
+let ops =
+    AppDependencies
+    | where TimeGenerated > ago(1h)
+    | where DependencyType has "Service Bus" or Target has "servicebus.windows.net"
+    | distinct OperationId;
+union
+    (AppRequests
+        | where TimeGenerated > ago(1h) and OperationId in (ops)
+        | extend Kind = "request", Detail = Name),
+    (AppDependencies
+        | where TimeGenerated > ago(1h) and OperationId in (ops)
+        | extend Kind = "dependency", Detail = strcat(DependencyType, " :: ", Name))
+| project TimeGenerated, OperationId, Kind, Detail, Target, DurationMs, SpanId = Id, ParentSpanId = ParentId
+| order by OperationId asc, TimeGenerated asc
+//
+// READING THE RESULT. One OperationId should carry, in order: the HTTP
+// request; a SQL dependency; a Service Bus publish dependency; then a second
+// request (the consumer) whose ParentSpanId matches the publish span; then
+// the worker's own SQL dependency. If the second request has an empty or
+// unrelated ParentSpanId, traceparent is not surviving the hop and the two
+// halves are separate traces wearing the same clothes.
