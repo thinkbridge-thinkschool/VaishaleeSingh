@@ -113,6 +113,32 @@ param location = 'koreacentral'
 param keyVaultPurgeProtection = true
 param keyVaultSoftDeleteRetentionInDays = 90
 
+// --- Entra ID (Day 25) ----------------------------------------------------
+// THESE THREE ARE MISSING ON PURPOSE, AND THIS FILE DOES NOT COMPILE WITHOUT
+// THEM. That is the point.
+//
+//   param azureAdTenantId = '<tenant that owns this subscription>'
+//   param azureAdClientId = '<appId of the PROD API registration>'
+//   param azureAdAudience = 'api://<appId>'
+//
+// main.bicep used to default them to a tenant, a client id and an audience
+// copied from appsettings.json. This file overrode none of the three, so a
+// prod deployment would have succeeded and authenticated nothing: the wrong
+// tenant, a registration that does not live in it, and an audience that is
+// really a scope. Nothing would have errored, because no genuine Entra token
+// has been sent yet — Day 25 found the same audience bug in dev and called
+// that failure mode out precisely because it is invisible.
+//
+// The defaults are gone, so `az bicep build-params` now stops here and names
+// what is absent. Fill it by running, NOT by copying dev's values:
+//
+//   ./Day25/scripts/02-entra-app-registrations.ps1 -Environment prod
+//
+// It creates a separate prod registration and writes the three lines into this
+// file. Prod must not share dev's registration: one consent screen, one set of
+// redirect URIs and one app whose tokens are accepted by both environments is
+// how a dev token ends up valid in production.
+
 // --- Alerting (Day 26) ----------------------------------------------------
 // Stricter than dev, and for a reason rather than for tidiness: production
 // does not scale to zero, so its five-minute windows carry real traffic and

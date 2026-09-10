@@ -51,13 +51,39 @@
 param(
     [string] $SubscriptionId = '85567e22-432e-4648-aa68-ba2714167694',
     [string] $ExpectedTenantId = '8d46a076-d093-416d-a57b-8692cde13bf8',
-    [string] $ApiDisplayName = 'QuotesApi (dev)',
-    [string] $SpaDisplayName = 'quotes-web (dev)',
-    [string] $WebUrl = 'https://quotes-web-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io'
+
+    # WHICH ENVIRONMENT, AND WHY PROD GETS ITS OWN REGISTRATION.
+    #
+    # Sharing one registration across dev and prod is the tempting shortcut and
+    # it is the wrong one: a single app means one set of redirect URIs, one
+    # consent grant, and tokens that both environments accept. A token minted
+    # for the dev SPA would then be valid against production. Two registrations
+    # cost nothing -- neither has a client secret -- and the isolation is the
+    # entire reason to have separate environments.
+    [ValidateSet('dev', 'prod')]
+    [string] $Environment = 'dev',
+
+    # Left empty on purpose: filled from $Environment below unless overridden,
+    # so the names and the target parameter file can never disagree.
+    [string] $ApiDisplayName = '',
+    [string] $SpaDisplayName = '',
+
+    # The deployed SPA's origin, added as a redirect URI. Prod's is not known
+    # until the prod stack exists, so prod may be run without it and re-run
+    # later; see the note where the URIs are set.
+    [string] $WebUrl = ''
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+# Everything environment-specific resolved in one place.
+if ([string]::IsNullOrWhiteSpace($ApiDisplayName)) { $ApiDisplayName = "QuotesApi ($Environment)" }
+if ([string]::IsNullOrWhiteSpace($SpaDisplayName)) { $SpaDisplayName = "quotes-web ($Environment)" }
+if ([string]::IsNullOrWhiteSpace($WebUrl) -and $Environment -eq 'dev') {
+    $WebUrl = 'https://quotes-web-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io'
+}
+$ParamFileName = "main.$Environment.bicepparam"
 
 function Ok   ([string] $m) { Write-Host "  OK    $m" -ForegroundColor Green }
 function Note ([string] $m) { Write-Host "  note  $m" -ForegroundColor Yellow }
@@ -229,7 +255,12 @@ if ($null -ne $spaApp -and $PSCmdlet.ShouldProcess($SpaDisplayName, 'set SPA red
     # error names CORS rather than the registration.
     $null = Invoke-Graph -Method PATCH -Url "https://graph.microsoft.com/v1.0/applications/$($spaApp.id)" -Body @{
         spa = @{
-            redirectUris = @('http://localhost:4200', $WebUrl)
+            # localhost always; the deployed origin only if we know it. Sending an
+            # empty string here is not harmless -- Entra stores it and then
+            # rejects the whole redirect set on the next update with an error
+            # that names neither the empty entry nor this script.
+            redirectUris = @('http://localhost:4200') +
+                           @(if (-not [string]::IsNullOrWhiteSpace($WebUrl)) { $WebUrl })
         }
         requiredResourceAccess = @(
             @{
@@ -251,7 +282,7 @@ if ($null -ne $spaApp -and $PSCmdlet.ShouldProcess($SpaDisplayName, 'set SPA red
 # transcribed by hand is three chances to transpose a character, and every one
 # of those mistakes fails the same way -- as an audience or issuer mismatch at
 # token validation, which reads like a broken auth scheme rather than a typo.
-$paramFile = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..\..')) 'Day7\piece2\infra\main.dev.bicepparam'
+$paramFile = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..\..')) "Day7\piece2\infra\$ParamFileName"
 
 if (-not (Test-Path $paramFile)) {
     Note "Could not find $paramFile. Set these by hand instead:"
@@ -262,10 +293,10 @@ if (-not (Test-Path $paramFile)) {
     $content = Get-Content $paramFile -Raw
     if ([string]::IsNullOrWhiteSpace($content)) { Die "$paramFile is empty." }
 
-    # The audience line is the anchor: it is the only one of the three this file
-    # currently sets, the other two falling through to main.bicep's defaults.
-    # Replacing it with all three moves every Entra value into one visible place
-    # rather than leaving two of them inherited and invisible here.
+    # All three together, in one visible place. main.bicep no longer defaults
+    # any of them -- a stale default deployed a silently broken auth scheme --
+    # so each environment's file must carry its own, and this is what writes
+    # them.
     $replacement = @"
 param azureAdTenantId = '$tenantId'
 param azureAdClientId = '$apiAppId'
@@ -279,10 +310,24 @@ param azureAdAudience = '$identifierUri'
 
     $pattern = "(?m)^param azureAdAudience = '[^']*'"
     if ($content -notmatch $pattern) {
-        Note 'Could not find the azureAdAudience line to replace. Set these by hand:'
-        Write-Host "param azureAdTenantId = '$tenantId'"
-        Write-Host "param azureAdClientId = '$apiAppId'"
-        Write-Host "param azureAdAudience = '$identifierUri'"
+        # NO ANCHOR TO REPLACE, SO INSERT. A fresh environment's parameter file
+        # has never carried these three -- prod's does not, which is why prod
+        # would have inherited main.bicep's stale defaults. Falling back to
+        # "set these by hand" here is how three GUIDs get transcribed, and a
+        # transposed character in any of them fails as an audience or issuer
+        # mismatch that reads like a broken auth scheme rather than a typo.
+        $marker = '// --- Alerting (Day 26)'
+        $index  = $content.IndexOf($marker)
+        if ($index -ge 0) {
+            $content = $content.Substring(0, $index) +
+                       $replacement.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine +
+                       $content.Substring($index)
+        } else {
+            $content = $content.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine +
+                       $replacement.TrimEnd() + [Environment]::NewLine
+        }
+        Set-Content -Path $paramFile -Value $content -NoNewline
+        Ok "Inserted the three Entra parameters into $ParamFileName"
     } else {
         # Idempotent: a re-run rewrites the same three lines rather than stacking
         # duplicates, because the tenant and client lines are removed first.
@@ -290,7 +335,7 @@ param azureAdAudience = '$identifierUri'
         $content = $content -replace "(?m)^param azureAdClientId = '[^']*'\r?\n", ''
         $content = [regex]::Replace($content, $pattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $replacement.TrimEnd() }, 1)
         Set-Content -Path $paramFile -Value $content -NoNewline
-        Ok "Wrote the three Entra parameters into main.dev.bicepparam"
+        Ok "Wrote the three Entra parameters into $ParamFileName"
     }
 }
 
@@ -314,7 +359,7 @@ Note 'Neither registration has a client secret, and neither needs one: the SPA i
 Note 'public client using PKCE, and the API only validates tokens.'
 Write-Host ''
 Write-Host 'Next:' -ForegroundColor Cyan
-Write-Host '  1. Review the change:  git diff Day7/piece2/infra/main.dev.bicepparam'
+Write-Host "  1. Review the change:  git diff Day7/piece2/infra/$ParamFileName"
 Write-Host '  2. Redeploy the stack so the container app picks up the new AzureAd__* values.'
 Write-Host '  3. Re-run Day25/scripts/00-prove-no-secrets.ps1 -- it should still be 13/0,'
 Write-Host '     because none of this adds a secret. That is the point of checking.'

@@ -63,7 +63,24 @@ param(
     [string] $RepoWithIds     = 'thinkbridge-thinkschool@285446293/VaishaleeSingh@1331675643',
     [string] $DisplayName     = 'github-actions-quotes (dev)',
     [string] $Registry        = 'cr7mo4cimyk4vnk',
-    [string[]] $ContainerApps = @('quotes-api-dev', 'quotes-web-dev')
+    [string[]] $ContainerApps = @('quotes-api-dev', 'quotes-web-dev'),
+
+    # PROD, AND WHY THESE ARE EMPTY.
+    #
+    # The prod registry's name is derived from a resource token inside
+    # main.bicep, so it does not exist and cannot be predicted until the prod
+    # stack has been created once. Passing a guessed name here would create
+    # role assignments against a resource id that resolves to nothing -- which
+    # Azure accepts silently, so the pipeline would fail later with a
+    # permission error against a scope that was never real.
+    #
+    # So: run this once without them to establish the trust, create the prod
+    # stack, then re-run WITH them to grant the pipeline access to what now
+    # exists. The federated credentials below are registered either way,
+    # because trust is not scoped to a resource.
+    [string] $ProdResourceGroup   = 'thinkschool-prod-rg',
+    [string] $ProdRegistry        = '',
+    [string[]] $ProdContainerApps = @('quotes-api-prod', 'quotes-web-prod')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -224,6 +241,21 @@ foreach ($subjectRepo in $subjects) {
     $suffix = if ($index -eq 0) { '' } else { "-$index" }
     $creds += @{ name = "main$suffix";         subject = "repo:${subjectRepo}:ref:refs/heads/main" }
     $creds += @{ name = "pull-request$suffix"; subject = "repo:${subjectRepo}:pull_request" }
+
+    # PROD DEPLOYS FROM ITS OWN BRANCH, so its ref needs its own credential:
+    # a credential for main does not authorise a run on production, and the
+    # whole point of the separate branch is that the two cannot deploy each
+    # other's environment.
+    $creds += @{ name = "production$suffix"; subject = "repo:${subjectRepo}:ref:refs/heads/production" }
+
+    # AND THE ENVIRONMENT SUBJECT, WHICH IS THE ONE THAT WILL ACTUALLY BE
+    # PRESENTED. A job that declares `environment: production` gets a subject
+    # of repo:<owner>/<repo>:environment:production -- the environment form
+    # REPLACES the ref form rather than being sent alongside it. Registering
+    # only the branch credential and then adding an environment for the
+    # required-reviewer gate is how a working pipeline breaks the moment the
+    # gate is added, with AADSTS700213 naming a subject nobody registered.
+    $creds += @{ name = "env-production$suffix"; subject = "repo:${subjectRepo}:environment:production" }
     $index++
 }
 
@@ -313,6 +345,39 @@ Grant -Role 'Reader'  -Scope $acrScope -What "registry $Registry (ARM read, requ
 foreach ($appName in $ContainerApps) {
     $scope = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.App/containerApps/$appName"
     Grant -Role 'Contributor' -Scope $scope -What "container app $appName"
+}
+
+# --- The same, for prod, once prod exists ----------------------------------
+#
+# GRANTED SEPARATELY RATHER THAN AT THE SUBSCRIPTION. One Contributor
+# assignment at the subscription would cover both environments in a single
+# line and would also mean the dev pipeline can roll production. The separate
+# branch, the separate environment and the required reviewer would then all be
+# procedure rather than permission -- and procedure is what gets bypassed at
+# 2am. Two sets of resource-scoped assignments is the boring answer that
+# actually holds.
+if ([string]::IsNullOrWhiteSpace($ProdRegistry)) {
+    Write-Host ''
+    Note 'Prod roles SKIPPED: -ProdRegistry was not supplied.'
+    Note 'The prod registry name comes from a resource token in main.bicep, so'
+    Note 'it is not knowable until the prod stack has been created once. Create'
+    Note 'the stack, then re-run this script with:'
+    Note ''
+    Note '  -ProdRegistry (az acr list -g thinkschool-prod-rg --query "[0].name" -o tsv)'
+    Note ''
+    Note 'The federated credentials above are already registered, so the prod'
+    Note 'workflow will authenticate; it will fail on authorization until this'
+    Note 'is run, which is the right order -- trust first, access second.'
+} else {
+    Write-Host ''
+    $prodAcrScope = "/subscriptions/$SubscriptionId/resourceGroups/$ProdResourceGroup/providers/Microsoft.ContainerRegistry/registries/$ProdRegistry"
+    Grant -Role 'AcrPush' -Scope $prodAcrScope -What "PROD registry $ProdRegistry"
+    Grant -Role 'Reader'  -Scope $prodAcrScope -What "PROD registry $ProdRegistry (management-plane read)"
+
+    foreach ($appName in $ProdContainerApps) {
+        $scope = "/subscriptions/$SubscriptionId/resourceGroups/$ProdResourceGroup/providers/Microsoft.App/containerApps/$appName"
+        Grant -Role 'Contributor' -Scope $scope -What "PROD container app $appName"
+    }
 }
 
 # ---------------------------------------------------------------------------

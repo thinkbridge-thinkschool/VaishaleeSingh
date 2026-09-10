@@ -120,18 +120,39 @@ param jwtAudience string = 'quotes-api'
 // request — a regression produced by an infrastructure refactor, which is
 // exactly the class of thing what-if is for.
 //
-// Defaults come from QuotesApi/appsettings.json. These are directory
-// identifiers, not secrets: a tenant ID and a public client ID identify an app
+// NO DEFAULTS, DELIBERATELY, AND THIS USED TO BE THREE DEFAULTS.
+//
+// These three carried values copied from appsettings.json: tenant
+// f774bb68-…, a client id from a registration in that tenant, and the audience
+// 'api://quotes-api/access'. All three were wrong by the time Day 25 finished.
+// The registration moved to the tenant that owns the subscription, and the
+// audience was a SCOPE rather than an audience — Entra issues tokens whose aud
+// is the resource's Application ID URI, with the scope carried in scp.
+//
+// main.dev.bicepparam was corrected. main.prod.bicepparam overrode none of
+// them, so prod would have deployed CLEANLY and authenticated nothing: the
+// Entra scheme would fail audience validation on every genuine token, and
+// because nothing has sent one yet, no error would appear anywhere. A default
+// that is silently wrong is worse than a missing value, because a missing
+// value stops the deployment and asks.
+//
+// So they are required now. Every environment states its own registration, and
+// a new environment that forgets fails at deployment time instead of running
+// with dev's identity or a dead one. Day25/scripts/02-entra-app-registrations.ps1
+// writes these three lines into the parameter file it targets, so nobody
+// retypes a GUID.
+//
+// Still not secrets: a tenant id and a public client id identify an app
 // registration, they do not authenticate anything.
 
-@description('Entra ID application (client) ID of the API registration.')
-param azureAdClientId string = '91566dbd-d857-488a-858d-475e60b309b7'
+@description('Entra ID application (client) ID of the API registration. Required: no default, because a stale default deploys a silently broken auth scheme.')
+param azureAdClientId string
 
-@description('Entra ID tenant ID.')
-param azureAdTenantId string = 'f774bb68-0575-4cd2-9d4c-3b4e593d1110'
+@description('Entra ID tenant ID. Required: see azureAdClientId.')
+param azureAdTenantId string
 
-@description('Expected audience for Entra-issued tokens. NOTE: appsettings.json and the deployed app disagree on this — see the parameter files.')
-param azureAdAudience string = 'api://quotes-api/access'
+@description('Expected audience for Entra-issued tokens — the registration\'s Application ID URI (api://<appId>), NOT a scope. Required: see azureAdClientId.')
+param azureAdAudience string
 
 // Derived, not typed out. appsettings.json carries the authority as a literal
 // 'https://login.microsoftonline.com/<tenant>/v2.0', and copying that into a
@@ -695,6 +716,14 @@ output SERVICE_QUOTES_API_NAME string = api.outputs.containerAppName
 output SERVICE_QUOTES_API_URI string = api.outputs.containerAppUri
 output APPLICATIONINSIGHTS_NAME string = monitoring.outputs.applicationInsightsName
 output AZURE_LOG_ANALYTICS_WORKSPACE_NAME string = monitoring.outputs.logAnalyticsWorkspaceName
+// Emitted so a promotion script can find the vault it must seed. The vault is
+// created empty by design, so the FIRST deploy of any new environment leaves
+// the API unable to resolve its jwt-secret reference until something seeds it
+// -- and that something needs the name. Without this output the operator reads
+// it out of the portal, which is how a secret gets written into the wrong
+// environment's vault.
+output AZURE_KEY_VAULT_NAME string = keyVault.outputs.keyVaultName
+
 output AZURE_SQL_SERVER_FQDN string = sql.outputs.sqlServerFqdn
 output AZURE_SQL_DATABASE_NAME string = sql.outputs.databaseName
 output AZURE_SERVICE_BUS_FQDN string = serviceBus.outputs.namespaceFqdn
