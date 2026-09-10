@@ -249,7 +249,11 @@ try {
     $v = Invoke-AzText @('stack', 'sub', 'validate', '--name', $StackName, '--location', $Location,
                          '--template-file', 'infra/main.bicep', '--parameters', 'infra/main.prod.bicepparam',
                          '--action-on-unmanage', 'deleteAll', '--deny-settings-mode', 'denyDelete',
-                         '--yes', '-o', 'none')
+                         # NO --yes HERE. `stack sub validate` does not accept it -- only
+                         # `create` does, where it skips the confirmation prompt. Passing it
+                         # fails as "unrecognized arguments: --yes", which reads like the
+                         # template is wrong rather than the command line.
+                         '-o', 'none')
     if ($v.ExitCode -ne 0) {
         Write-Host $v.Text
         Die 'Validation failed. Nothing was created.'
