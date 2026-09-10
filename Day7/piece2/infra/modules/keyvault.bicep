@@ -54,7 +54,7 @@ param tags object
 param appPrincipalId string = ''
 
 @description('Object ID of the human operator who must SEED the signing key. Empty grants nobody. Not a secret: a directory object id identifies a principal, it does not authenticate one.')
-param secretsOfficerPrincipalId string = ''
+param vaultWriterPrincipalId string = ''
 
 // PURGE PROTECTION IS A PARAMETER, AND IT IS OFF BY DEFAULT, WHICH LOOKS LIKE
 // THE WRONG DEFAULT UNTIL YOU HOLD IT NEXT TO DAY 24.
@@ -168,11 +168,11 @@ resource secretsUserRoleAssignment 'Microsoft.Authorization/roleAssignments@2022
 // Secrets OFFICER, not User, because seeding is a write -- and scoped to this
 // vault alone, for one named principal, so it is narrower than the
 // subscription-level grant that would otherwise be the tempting shortcut.
-resource secretsOfficerRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(secretsOfficerPrincipalId)) {
-  name: guid(keyVault.id, secretsOfficerPrincipalId, 'KeyVaultSecretsOfficer')
+resource secretsOfficerRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(vaultWriterPrincipalId)) {
+  name: guid(keyVault.id, vaultWriterPrincipalId, 'KeyVaultSecretsOfficer')
   scope: keyVault
   properties: {
-    principalId: secretsOfficerPrincipalId
+    principalId: vaultWriterPrincipalId
     // A human, not a service principal. Getting this wrong makes the
     // assignment fail with a message about the principal not being found,
     // which reads like a wrong object id.

@@ -146,6 +146,31 @@ param location = 'uaenorth'
 // days of soft-delete keeps the recovery window that matters while leaving
 // the name reclaimable. A real production vault should have this true; a
 // vault that is stood up and torn down as an exercise should not.
+// AN EXPLICIT NAME, BECAUSE TWO OF THIS VAULT'S PROPERTIES ARE WRITE-ONCE.
+//
+// The name is normally derived from the resource token, which keeps it unique
+// and is right for every other resource here. It cannot stay derived for prod,
+// and the reason is worth the paragraph.
+//
+// The first prod attempt created kv-whppc5qu7yzzg with purge protection on and
+// 90-day retention. Correcting those two values then failed:
+//
+//   BadRequest: The property "softDeleteRetentionInDays" has been set already
+//   and it can't be modified.
+//
+// softDeleteRetentionInDays is immutable once set, and enablePurgeProtection
+// can only ever be turned ON -- Azure offers no path back for either. So a
+// vault whose first deployment got them wrong cannot be fixed in place, and
+// because the derived name is deterministic, every retry addressed that same
+// unfixable vault. The only way forward is a different name.
+//
+// kv-whppc5qu7yzzg is abandoned deliberately. It carries purge protection
+// permanently, so when the stack removes it the vault soft-deletes and holds
+// that name for its retention window; nothing can shorten that. Naming the
+// vault here means prod's vault is created once with the settings it should
+// have had, and is not hostage to the first attempt's mistake.
+param keyVaultName = 'kv-quotes-prod'
+
 param keyVaultPurgeProtection = false
 param keyVaultSoftDeleteRetentionInDays = 7
 
@@ -160,7 +185,7 @@ param keyVaultSoftDeleteRetentionInDays = 7
 // A hand-run `az role assignment create` fixes that once and then disappears
 // with the vault on the next failed deployment. Granting it here means the
 // vault arrives usable. Scoped to this vault alone, for this one principal.
-param keyVaultSecretsOfficerPrincipalId = 'a59d00a8-a829-49b4-83d1-952727eea166'
+param keyVaultWriterPrincipalId = 'a59d00a8-a829-49b4-83d1-952727eea166'
 
 // --- Entra ID (Day 25) ----------------------------------------------------
 // THESE THREE ARE MISSING ON PURPOSE, AND THIS FILE DOES NOT COMPILE WITHOUT
