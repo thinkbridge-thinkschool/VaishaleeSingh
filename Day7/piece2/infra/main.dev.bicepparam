@@ -166,6 +166,20 @@ param azureAdClientId = '18920fc7-79a5-42f0-bf65-c101749dd79b'
 // have failed audience validation on every genuine token.
 param azureAdAudience = 'api://18920fc7-79a5-42f0-bf65-c101749dd79b'
 
+// --- Alerting (Day 26) ----------------------------------------------------
+// A real address, because an alert nobody receives is not an alert. It is
+// personal data rather than a credential, so it belongs here in the parameter
+// file rather than defaulted into main.bicep where it would follow every
+// environment.
+//
+// Five percent, in an environment that scales to zero and is redeployed
+// several times a day. That sounds slack for production and is deliberately
+// so here: the query already refuses to report a rate below twenty requests
+// in five minutes, and the rule requires the condition to hold twice in a row,
+// so the threshold is the third guard rather than the only one.
+param alertEmailAddress = 'vaishalisinghsln5@gmail.com'
+param errorRateThresholdPct = 5
+
 // --- Observability -------------------------------------------------------
 // 30 days is the included, no-extra-cost retention. The 1 GB/day cap is a cost
 // guard that is only acceptable because losing dev telemetry costs nothing —
