@@ -13,6 +13,47 @@ it in place rather than copying it forward. `Day5/piece2` is still what CI
 builds (see "Working in this repo"), which is a gap rather than a statement
 about which folder is current.
 
+## Deployed environments
+
+Two environments on one Azure subscription, deployed as separate Azure
+Deployment Stacks (`quotes-dev`, `quotes-prod`) from the same template with
+different parameter files.
+
+| | API | Web |
+|---|---|---|
+| **dev** | [quotes-api-dev](https://quotes-api-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io/health) | [quotes-web-dev](https://quotes-web-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io) |
+| **prod** | [quotes-api-prod](https://quotes-api-prod.greenhill-88fb93d9.uaenorth.azurecontainerapps.io/health) | [quotes-web-prod](https://quotes-web-prod.greenhill-88fb93d9.uaenorth.azurecontainerapps.io/quotes) |
+
+The API links point at `/health`, which is the one endpoint worth clicking: a
+200 there means the app booted (so its Key Vault reference resolved — the JWT
+signing key is bound with `ValidateOnStart()` and a minimum length, so a
+missing key is a startup failure) and that EF Core authenticated to an
+Entra-only SQL server as its managed identity, where no password path exists to
+explain the result.
+
+**What differs, and what does not.** Prod has its own resource group, SQL
+server and database, Service Bus namespace, Key Vault, container registry,
+container apps, managed identity, Entra app registration, Log Analytics
+workspace and alert rule. It shares exactly one thing with dev — the Container
+Apps environment — because this subscription permits one in total
+(`MaxNumberOfGlobalEnvironmentsInSubExceeded`). That is a constraint the
+subscription imposed, not a design choice, and it means prod's app traffic
+traverses infrastructure dev also uses. On a subscription allowing two, they
+would be fully separate.
+
+Prod also does not scale to zero: two always-on API replicas, a serverless SQL
+database with auto-pause disabled, and geo-redundant backups. It therefore
+bills continuously whether or not anyone uses it, and is torn down between
+exercises with `az stack sub delete --name quotes-prod --action-on-unmanage
+deleteAll` — so a link above may answer nothing at any given moment. Standing
+prod back up is `Day24/scripts/05-promote-prod.ps1`.
+
+**Deployment paths are separate too.** A merge to `main` deploys dev; a merge
+to `production` deploys prod, through `.github/workflows/prod-deploy.yml` under
+a GitHub Environment with a required reviewer. Prod does not rebuild — it
+promotes the image dev already built and tested, with `az acr import`, so the
+bytes that passed the tests are the bytes that run.
+
 ## The application
 
 `QuotesApi` is an ASP.NET Core minimal API on .NET 10 with EF Core over SQLite

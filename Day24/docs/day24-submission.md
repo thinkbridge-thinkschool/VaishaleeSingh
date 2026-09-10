@@ -127,10 +127,6 @@ Scope: /subscriptions/.../resourceGroups/thinkschool-dev-rg
       ...
 ```
 
-<!-- FILL IN: paste the output of
-       az stack sub show -n quotes-dev --query "{name:name, state:provisioningState, resourceCount:length(resources)}" -o table
-     here, to show the stack's final state rather than only its initial plan. -->
-
 Final state: stack `quotes-dev` reached `succeeded` with 21 managed resources,
 including both container apps, Azure SQL, and Service Bus. SQL Server
 migrations were applied out of band (see `03-apply-sql-migrations.ps1` below)
@@ -138,18 +134,213 @@ and confirmed via `Day24/verification/sqlserver-migrations-applied.txt`.
 
 Live endpoints (dev):
 
-- API: `<FILL IN — az containerapp show -n quotes-api-dev -g thinkschool-dev-rg --query properties.configuration.ingress.fqdn -o tsv>`
-- Web: `<FILL IN — az containerapp show -n quotes-web-dev -g thinkschool-dev-rg --query properties.configuration.ingress.fqdn -o tsv>`
+- API: `https://quotes-api-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io`
+- Web: `https://quotes-web-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io`
 
 ## Deploy output — prod
 
-Not yet run. `infra/main.prod.bicepparam` is written and region-checked
-(`koreacentral`, confirmed permitted by this subscription's allowed-locations
-policy via `01-region-fit.ps1`) and `az stack sub validate` passes against it,
-but `az stack sub create` for `quotes-prod` has not been executed in this
-subscription — promoting dev to prod, verifying it, and tearing it back down
-is the next step, tracked separately from this submission rather than
-reported here as done.
+**Deployed and verified.** Stack `quotes-prod`, subscription
+`85567e22-…`, resource group `thinkschool-prod-rg`, region `uaenorth`.
+
+```
+quotes-api-prod--0000001   Running   100%   crwhppc5qu7yzzg.azurecr.io/quotes-api:b2ee57546f24
+```
+
+- API `https://quotes-api-prod.greenhill-88fb93d9.uaenorth.azurecontainerapps.io`
+- Web `https://quotes-web-prod.greenhill-88fb93d9.uaenorth.azurecontainerapps.io`
+
+Registry `crwhppc5qu7yzzg`, vault `kv-quotes-prod`, SQL
+`sql-quotes-whppc5qu7yzzg`, identity `id-quotes-api-whppc5qu7yzzg` — all
+prod's own. Three migrations applied
+(`Day24/verification/sqlserver-migrations-applied.txt`), and the zero-secrets
+proof re-run against prod: **13 passed, 0 failed**
+(`Day25/verification/no-secrets-prod-AFTER.txt`).
+
+The image was **promoted, not rebuilt**: `az acr import` copies the manifest
+server-side from the dev registry, so the bytes prod runs are the bytes the
+tests passed on. A rebuild on a release branch compiles the same source into a
+different binary — different base digest, different SDK patch — and ships
+something no test touched.
+
+### It took eight attempts, and the failures are the content
+
+Nothing about the first seven was random. Each named a real property of this
+subscription, this template or this design that no document stated, and the
+preflight now checks the ones that are checkable.
+
+| # | Stopped by | What it actually meant |
+|---|---|---|
+| 1–3 | `unrecognized arguments`, `--yes` on validate | My own command lines. `--deny-settings-excluded-actions` takes **one** space-separated string, not several arguments — the help says so only in an example. |
+| 4 | `MaxNumberOfGlobalEnvironmentsInSubExceeded` | One Container Apps environment per **subscription**, not per region — which is what `main.bicep`'s own description claimed, and why prod chose a second region expecting to get a second environment. |
+| 5 | `DeploymentStackInNonTerminalState` | A failed create tears down what it made (`actionOnUnmanage: deleteAll`), so the stack is busy for minutes afterwards and cannot be updated. |
+| 6 | `(Forbidden)` on the vault | The vault is created empty by design, so somebody must seed it — and on a new RBAC vault the operator has no write access. Granted by the template now, because a hand-granted assignment dies with the vault on the next failure. |
+| 7 | `softDeleteRetentionInDays ... can't be modified` | Two vault properties are **write-once**: retention is immutable once set and purge protection can only ever be turned on. The first attempt's vault could not be corrected, only abandoned. |
+| 8 | `Client with IP ... is not allowed` | `main.dev.bicepparam` has carried a `SQL_CLIENT_IP` firewall block since Day 23; prod's never got one, so its server admitted nobody. |
+| 9 | `CrashLoopBackOff` | The app's own startup check: *"The SQL Server database has no applied migrations. They are applied by the deployment, not by this app."* Correct design — two replicas starting together would race a self-migrating app — and the promotion had no such step. Now step 8b. |
+
+Number 7 was the expensive one, and not in time. Purge protection was `true`
+with 90-day retention, argued in a comment as the right production trade. It
+is the wrong trade for an environment whose lifecycle *includes* teardown: a
+deleted vault soft-deletes, cannot be purged during the window, and holds its
+deterministically-derived name for ninety days. A few more failed attempts
+would have locked this environment out of its own vault name for a quarter of
+a year. `kv-whppc5qu7yzzg` is abandoned for exactly that reason and carries
+purge protection permanently, because that flag has no off switch.
+
+Two of my diagnoses along the way were wrong and both were guesses: I read
+"even the hello-world placeholder fails to start" as proof the fault lay
+outside the app, when `CrashLoopBackOff` means the container ran and exited;
+and I proposed a core-quota explanation that the usage API showed was not in
+play at all. Two commands — the replica-level reason and the console log —
+answered it, and neither guess was needed.
+
+### What reading the parameters found before any of that
+
+Five things that would each have produced a prod environment that deployed
+green and did not work.
+
+**1. Prod would have run Microsoft's hello-world container.** With
+`quotesApiExists = false` and `webAppExists = false`, `main.bicep` resolves the
+image to `mcr.microsoft.com/azuredocs/aci-helloworld:latest` — the placeholder
+that exists so an infra-only update cannot revert a running app. Prod also gets
+its **own** registry, because the name derives from a resource token, and CI
+only ever pushes to dev's. So promotion has to move the image, and it moves it
+with `az acr import` rather than a rebuild: a rebuild on the release branch
+compiles the same source into a *different* binary — different base digest,
+different SDK patch, different restored packages — and what reaches production
+is then something no test ever ran against.
+
+**2. Prod had no Entra parameters, and the defaults were worse than nothing.**
+`main.bicep` defaulted `azureAdClientId`, `azureAdTenantId` and
+`azureAdAudience` to values copied out of `appsettings.json`: a tenant that no
+longer owns anything here, a registration that does not live in the current
+tenant, and `api://quotes-api/access` — a *scope*, not an audience, which is
+the bug Day 25 found and fixed in dev's parameter file. Prod overrode none of
+them, so prod would have deployed cleanly and authenticated nothing, silently,
+because no genuine Entra token has been sent yet.
+
+The three parameters are now **required, with no defaults**. A default that is
+silently wrong is worse than a missing value, because a missing value stops the
+deployment and asks. `02-entra-app-registrations.ps1` takes `-Environment
+dev|prod` and writes them into the matching parameter file, and
+`05-promote-prod.ps1` refuses to promote if prod's client id equals dev's —
+sharing one registration means a token minted for dev is valid in production.
+
+**3. The SQL administrator is a group that has to exist first.**
+`sqlEntraAdminObjectId` names the group `quotes-sql-admins`. If it is not in
+the tenant, the deployment fails on the SQL server — after the resource group
+and registry already exist. Now a preflight check.
+
+**4. Two steps ARM cannot do, both learned in dev.** The vault is created
+empty on purpose, so the first deploy of any fresh environment *always* fails
+once: the container app cannot resolve its `jwt-secret` reference. And an
+Entra-only server grants the identity access to the *server*; the contained
+user inside the *database* is T-SQL. Skipping it produces an app that starts
+and never becomes ready. `main.bicep` now emits `AZURE_KEY_VAULT_NAME` so the
+promotion script can find the vault it must seed rather than reading it out of
+the portal, which is how a secret ends up in the wrong environment's vault.
+
+**5. Cost, which is why this is torn down between exercises.** Prod is deliberately not dev, and
+four of the differences bill whether or not anyone uses the app:
+
+| | dev | prod |
+|---|---|---|
+| `apiMinReplicas` | 0 | **2**, always on |
+| `sqlAutoPauseDelayMinutes` | 60 | **-1**, never pauses — 2 vCores continuous |
+| `sqlBackupStorageRedundancy` | Local | **Geo** |
+| `logDailyQuotaGb` | 1 | **-1**, no cap at all |
+
+Every one is correct for a real production environment. All of them are
+continuous spend on a subscription with finite credits — and the last one
+deserves naming twice: this project already blew dev's 1 GB cap with a log
+flood, and in prod that flood would have had no ceiling. So
+`05-promote-prod.ps1` prints this block and stops unless `-IAcceptTheCost` is
+passed. Spending should be a decision somebody made, not a side effect of
+running a script called "promote".
+
+One security note, recorded rather than silently accepted:
+`sqlPublicNetworkAccess = 'Enabled'` in prod. Entra-only authentication means
+there is no password path, so this is not a credential exposure — but the
+server is still reachable from any address the firewall rules permit, and for
+production that deserves a private endpoint or an explicit decision.
+
+### Standing prod up, and taking it down
+
+```
+./Day24/scripts/05-promote-prod.ps1 -WhatIf          # preflight + validate only
+./Day24/scripts/05-promote-prod.ps1 -IAcceptTheCost  # create, seed, import, roll, verify
+az stack sub delete --name quotes-prod --action-on-unmanage deleteAll --yes
+```
+
+That teardown line is the exercise's other half working: the stack knows every
+resource it created, so removing prod is one command rather than whatever the
+operator remembers to select.
+
+## Two environments, two merges
+
+`main` deploys **dev**. `production` deploys **prod**. Nothing deploys both.
+
+- `day17-api-deploy.yml` and `day24-web-deploy.yml` trigger on `main` and are
+  scoped to dev's resources.
+- `prod-deploy.yml` triggers only on `production`, runs under a GitHub
+  Environment named `production` so a required reviewer gates it, and
+  **promotes** — it imports the already-built image and never compiles.
+- The OIDC principal holds `AcrPush` and `Contributor` on each environment's
+  resources *separately*, never one Contributor at the subscription. With a
+  subscription-wide grant the separate branch, the environment and the reviewer
+  would all be procedure rather than permission, and procedure is what gets
+  bypassed at 2am.
+
+### One tag per app, not one per release — which the first run proved
+
+The promotion was keyed on the release commit's sha, for both images. Preflight
+rejected it immediately:
+
+```
+OK    quotes-api:b2ee57546f24 exists in the dev registry
+FAIL  quotes-web:b2ee57546f24 is not in the dev registry
+```
+
+The API and the front end are built by **separate workflows with separate path
+filters**, deliberately — an Angular change must not rebuild and redeploy the
+API. So a commit touching only `Day7/piece2` produces `quotes-api:<sha>` and no
+`quotes-web:<sha>`. **There is no single tag both images share, and there never
+was**; a promotion keyed on one sha fails on whichever half the release did not
+touch.
+
+Each app now promotes the tag **its dev counterpart is currently running**,
+resolved off the live container app. That is stronger than a sha as well as
+correct: the running image is the only artefact that has actually been
+exercised, and "prod runs what dev runs" is what promoting dev to prod means. A
+tag can still be passed explicitly, for a rollback. Both the script and the
+workflow also refuse to promote `:latest` — unversioned, impossible to roll
+back to, and in this template it is the hello-world placeholder.
+
+The gate is unchanged and is still one query: an image only reaches the dev
+registry if the dev pipeline built it, and that pipeline only builds after the
+unit and integration tests pass. So "is this tag in the dev registry" is
+exactly "was this artefact tested".
+
+**What that costs, stated plainly:** the sha check used to double as
+enforcement that `production` was fast-forwarded, because a merge commit's sha
+carried no image. Resolving tags from the running dev app removes that
+side effect. Fast-forward is still how the branch should be advanced —
+
+```
+git checkout production && git merge --ff-only main && git push
+```
+
+— but nothing automatic enforces it now. A branch protection rule requiring
+linear history on `production` is where that belongs, and it is not yet set.
+
+One trap worth writing down, because it breaks a working pipeline the moment
+the gate is added: a job declaring `environment: production` presents the OIDC
+subject `repo:<owner>/<repo>:environment:production` **instead of** the branch
+ref subject — it replaces it rather than being sent alongside. Add the
+environment for the reviewer gate and authentication fails with AADSTS700213
+naming a subject nobody registered. `01-github-oidc.ps1` registers the branch
+form and the environment form, in both the documented and the immutable subject
+spellings this organisation uses.
 
 ## What Deployment Stacks give you over a plain deployment
 

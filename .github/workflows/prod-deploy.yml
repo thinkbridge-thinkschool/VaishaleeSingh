@@ -1,0 +1,262 @@
+name: prod-deploy
+
+# Promotes an already-built, already-tested image from the dev registry into
+# production. It does NOT build anything, and that is the whole design.
+#
+# WHY PROMOTION AND NOT A REBUILD. A rebuild on the production branch would
+# compile the same source a second time and ship a DIFFERENT binary: a
+# different base image digest, a different SDK patch, different restored
+# package versions. What then reaches production is something no test ever ran
+# against, and the dev pipeline's green tick describes an artifact that was
+# thrown away. `az acr import` moves the exact bytes between registries
+# without a pull or a push, so the image running in prod is the image the
+# tests passed on.
+#
+# WHY A SEPARATE BRANCH AND NOT A TAG. Two environments, two merges, two audit
+# trails: a merge into `main` deploys dev and a merge into `production` deploys
+# prod, and neither can deploy the other's environment because the OIDC
+# subjects and the role assignments are scoped separately (see
+# Day26/scripts/01-github-oidc.ps1). The reviewer gate is a GitHub Environment
+# rather than a branch rule, so the approval is recorded against the deployment
+# and not only against the commit.
+
+on:
+  push:
+    branches: [production]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag to promote (12-char commit sha). Defaults to the sha of this branch.'
+        required: false
+
+concurrency:
+  # Never cancel a production rollout. A cancelled `containerapp update` can
+  # leave the app pointing at the older of two images with nothing red to show
+  # it -- the exact failure the SWA workflow hit on dev, and it matters more
+  # here. Queue instead.
+  group: prod-deploy
+  cancel-in-progress: false
+
+env:
+  # Source: the dev registry, which is where CI pushes. Destination: prod's own
+  # registry, created by the prod stack.
+  DEV_REGISTRY: ${{ vars.AZURE_CONTAINER_REGISTRY_ENDPOINT }}
+  PROD_REGISTRY: ${{ vars.AZURE_PROD_CONTAINER_REGISTRY_ENDPOINT }}
+  PROD_RESOURCE_GROUP: ${{ vars.AZURE_PROD_RESOURCE_GROUP }}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+
+    # THE GATE. A required reviewer on this environment is what makes the
+    # separation real rather than procedural.
+    #
+    # AND IT CHANGES THE OIDC SUBJECT. A job declaring an environment presents
+    # `repo:<owner>/<repo>:environment:production` INSTEAD OF the branch ref
+    # subject -- it replaces it, not adds to it. Adding this line to a working
+    # workflow breaks authentication with AADSTS700213 naming a subject nobody
+    # registered. Both forms are registered by
+    # Day26/scripts/01-github-oidc.ps1; if this ever fails to authenticate,
+    # that script is where the fix is, not here.
+    environment: production
+
+    strategy:
+      # Independent reporting: the front end failing to roll should not be
+      # reported as an API failure, and should not stop the API rolling. Same
+      # reason dev has two workflows rather than one.
+      fail-fast: false
+      matrix:
+        include:
+          - image: quotes-api
+            app: quotes-api-prod
+            dev_app: quotes-api-dev
+          - image: quotes-web
+            app: quotes-web-prod
+            dev_app: quotes-web-dev
+
+    steps:
+      - name: Check the prod deployment variables are set
+        run: |
+          missing=0
+          check() {
+            if [ -z "$2" ]; then
+              echo "::error::Repository variable $1 is not set (or is empty)."
+              missing=1
+            fi
+          }
+          # Variables are EMPTY rather than absent when unset, so an unfilled
+          # one does not stop the workflow -- it substitutes "" and the first
+          # thing downstream to notice reports a malformed name three steps
+          # later, in a different system. Dev learned this the expensive way.
+          check AZURE_CONTAINER_REGISTRY_ENDPOINT      "$DEV_REGISTRY"
+          check AZURE_PROD_CONTAINER_REGISTRY_ENDPOINT "$PROD_REGISTRY"
+          check AZURE_PROD_RESOURCE_GROUP              "$PROD_RESOURCE_GROUP"
+
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::Set these under Settings > Secrets and variables > Actions > Variables. The prod values are outputs of the prod stack: az stack sub show -n quotes-prod --query outputs"
+            exit 1
+          fi
+          echo "from=$DEV_REGISTRY  to=$PROD_REGISTRY  group=$PROD_RESOURCE_GROUP"
+
+      - name: Sign in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # WHICH TAG, AND WHY IT IS NOT THE COMMIT SHA.
+      #
+      # The first version of this used ${GITHUB_SHA::12} for both images, and
+      # that is wrong for this repository. The API and the front end are built
+      # by SEPARATE workflows with separate path filters, deliberately -- an
+      # Angular change must not rebuild and redeploy the API. So a commit that
+      # touches only Day7/piece2 produces quotes-api:<sha> and NO
+      # quotes-web:<sha>, and a promotion keyed on one sha fails on whichever
+      # half the release did not touch. It did, on the first run:
+      #
+      #   OK    quotes-api:b2ee57546f24 exists in the dev registry
+      #   FAIL  quotes-web:b2ee57546f24 is not in the dev registry
+      #
+      # There is no single tag both images share, and there never was. So each
+      # app promotes THE TAG ITS DEV COUNTERPART IS RUNNING, which is both
+      # correct and stronger: the running image is the only artefact that has
+      # actually been exercised, and "prod runs what dev runs" is what
+      # promoting dev to prod means. `inputs.tag` overrides it for a rollback.
+      #
+      # The gate is unchanged and still one query: an image only reaches the
+      # dev registry if the dev pipeline built it, and that pipeline only
+      # builds after the unit and integration tests pass.
+      - name: Resolve the tag and confirm dev already built it
+        id: tag
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag }}"
+
+          if [ -z "$tag" ]; then
+            dev_image=$(az containerapp show \
+              --name "${{ matrix.dev_app }}" --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+              --query "properties.template.containers[0].image" -o tsv)
+            echo "${{ matrix.dev_app }} is running: $dev_image"
+            tag="${dev_image##*:}"
+          fi
+
+          if [ -z "$tag" ]; then
+            echo "::error::Could not determine a tag to promote for ${{ matrix.image }}."
+            exit 1
+          fi
+
+          # A placeholder is not something to promote. Without this the
+          # hello-world image would be imported and rolled out as if it were
+          # the app -- green the whole way.
+          if [ "$tag" = "latest" ]; then
+            echo "::error::${{ matrix.dev_app }} is running a ':latest' tag, which is unversioned and cannot be rolled back to. Refusing to promote it."
+            exit 1
+          fi
+
+          echo "Promoting ${{ matrix.image }}:$tag"
+          if ! az acr repository show-tags \
+                 --name "${DEV_REGISTRY%%.*}" \
+                 --repository "${{ matrix.image }}" \
+                 --query "contains(@, '$tag')" -o tsv | grep -qi true; then
+            echo "::error::${{ matrix.image }}:$tag is not in the dev registry, so it was never built or tested."
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Dev built and deployed this tag."
+
+      # NO PULL, NO PUSH, NO DOCKER. `az acr import` copies the manifest and
+      # layers server-side between registries, so the digest is preserved and
+      # the runner never handles the image. Cross-region is fine, which matters
+      # because prod is in a different region from dev.
+      - name: Import the image into the prod registry
+        run: |
+          set -euo pipefail
+          az acr import \
+            --name "${PROD_REGISTRY%%.*}" \
+            --source "$DEV_REGISTRY/${{ matrix.image }}:${{ steps.tag.outputs.tag }}" \
+            --image "${{ matrix.image }}:${{ steps.tag.outputs.tag }}" \
+            --force
+          echo "Imported ${{ matrix.image }}:${{ steps.tag.outputs.tag }}"
+
+      - name: Roll the prod Container App onto the imported image
+        run: |
+          az containerapp update \
+            --name "${{ matrix.app }}" \
+            --resource-group "$PROD_RESOURCE_GROUP" \
+            --image "$PROD_REGISTRY/${{ matrix.image }}:${{ steps.tag.outputs.tag }}"
+
+      # A green update only means Azure accepted the request. An unreachable
+      # target port, a failed image pull and an unresolvable Key Vault
+      # reference all report success here and then sit in Activating. All three
+      # happened on dev.
+      - name: Wait for the new revision to run
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            state=$(az containerapp revision list \
+              --name "${{ matrix.app }}" --resource-group "$PROD_RESOURCE_GROUP" \
+              --query "[?properties.active].properties.runningState | [0]" -o tsv)
+            echo "attempt $attempt: runningState=$state"
+            if [ "$state" = "Running" ]; then
+              echo "Revision is running."
+              exit 0
+            fi
+            if [ "$state" = "Failed" ] || [ "$state" = "Degraded" ]; then
+              echo "::error::The new revision reported $state."
+              az containerapp logs show --name "${{ matrix.app }}" \
+                --resource-group "$PROD_RESOURCE_GROUP" --type system --tail 50 || true
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "::error::The new revision did not reach Running within five minutes."
+          az containerapp logs show --name "${{ matrix.app }}" \
+            --resource-group "$PROD_RESOURCE_GROUP" --type system --tail 50 || true
+          exit 1
+
+      # The API probe is the same anonymous, side-effect-free one dev uses:
+      # POST /api/auth/login with an empty body returns this API's own
+      # validation problem naming "credentials", which the SPA shell cannot
+      # produce. The web app is checked for a 200 on its root only -- asserting
+      # HTML content here would make a bundle change able to fail an API
+      # promotion, which is what the dev split exists to prevent.
+      - name: Smoke-test
+        run: |
+          set -euo pipefail
+          fqdn=$(az containerapp show --name "${{ matrix.app }}" \
+            --resource-group "$PROD_RESOURCE_GROUP" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          origin="https://$fqdn"
+          echo "Probing $origin"
+
+          if [ "${{ matrix.image }}" = "quotes-api" ]; then
+            ok=false
+            for attempt in $(seq 1 10); do
+              body=$(curl -s --max-time 15 -X POST "$origin/api/auth/login" \
+                -H 'Content-Type: application/json' -d '{"email":"","password":""}' || true)
+              echo "attempt $attempt: $(printf '%.200s' "$body")"
+              case "$body" in
+                *credentials*) ok=true; break ;;
+                *"<!doctype"*|*"<!DOCTYPE"*)
+                  echo "::error::/api/auth/login returned the SPA shell, so the API is not answering its own routes."
+                  exit 1 ;;
+              esac
+              sleep 10
+            done
+            [ "$ok" = true ] || { echo "::error::The prod API did not answer within 100s."; exit 1; }
+          else
+            ok=false
+            for attempt in $(seq 1 10); do
+              code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$origin/" || true)
+              echo "attempt $attempt: HTTP $code"
+              if [ "$code" = "200" ]; then ok=true; break; fi
+              sleep 10
+            done
+            [ "$ok" = true ] || { echo "::error::The prod web app did not return 200 within 100s."; exit 1; }
+          fi
+          echo "Smoke test passed for ${{ matrix.app }}."

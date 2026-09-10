@@ -74,7 +74,21 @@ Set-StrictMode -Version Latest
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 $outDir   = Join-Path $repoRoot 'Day25\verification'
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-$reportPath = Join-Path $outDir $(if ($Baseline) { 'no-secrets-BEFORE.txt' } else { 'no-secrets-AFTER.txt' })
+# NAMED BY ENVIRONMENT, AND THIS FILE USED TO BE NAMED BY PHASE ALONE.
+#
+# Running the proof against prod overwrote dev's report, because both wrote to
+# no-secrets-AFTER.txt. Dev's 13/0 -- the evidence Day 25 was submitted on --
+# was gone until it was restored from the commit. A verification artefact that
+# a later run can silently replace is not evidence; it is the most recent run
+# wearing evidence's filename.
+#
+# dev keeps the historical names so nothing already submitted moves. Every
+# other environment gets its own suffix.
+$phase = if ($Baseline) { 'BEFORE' } else { 'AFTER' }
+$envTag = if ($ResourceGroup -match 'dev') { '' } else {
+    '-' + (($ResourceGroup -replace '^thinkschool-', '') -replace '-rg$', '')
+}
+$reportPath = Join-Path $outDir "no-secrets$envTag-$phase.txt"
 
 # ---------------------------------------------------------------------------
 # Plumbing

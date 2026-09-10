@@ -16,8 +16,10 @@ name: day17-api-deploy
 
 on:
   push:
-    # main only -- the Day 17 feature branch is merged, and production
-    # rollouts should have exactly one source branch.
+    # main only, and main means DEV. Production rolls from the `production`
+    # branch through prod-deploy.yml, which promotes an image this workflow
+    # already built rather than building its own -- so this file's job ends at
+    # dev, and nothing here can reach prod.
     branches: [main]
     paths:
       # The whole of Day7/piece2, not just QuotesApi/. The test projects are
@@ -40,11 +42,11 @@ concurrency:
   # two `containerapp update` calls interleaving can leave the app pointing at
   # the older of the two images.
   # Grouped by PR number for pull-request runs so a re-push replaces only that
-  # PR's own in-flight run, and cancel-in-progress is off for main: a rollout to
-  # production should queue behind the previous one, not cancel it. The SWA
-  # workflow lost a production deploy to exactly that -- the run for a merge
-  # commit on main was cancelled by a later request for the same group, so the
-  # live site stayed on the previous commit with nothing red to show it.
+  # PR's own in-flight run, and cancel-in-progress is off for main: a rollout
+  # should queue behind the previous one, not cancel it. The SWA workflow lost
+  # a deploy to exactly that -- the run for a merge commit on main was
+  # cancelled by a later request for the same group, so the live site stayed on
+  # the previous commit with nothing red to show it.
   group: api-deploy-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
