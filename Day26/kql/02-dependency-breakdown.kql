@@ -1,0 +1,36 @@
+// Day 26 — where the time actually goes, per dependency.
+//
+// ORDERED BY TOTAL TIME, NOT BY p99, AND THAT IS THE POINT OF THE QUERY.
+//
+// The instinct is to sort by the slowest call and start there. That finds the
+// wrong target more often than not: a 4 ms query executed 12,000 times costs
+// 48 seconds of wall clock, while a 900 ms call made twice costs 1.8. Sorting
+// by p99 puts the second at the top and the first nowhere. totalMs is the
+// latency budget — it is what you are actually spending — so it is what this
+// sorts on, with the percentiles kept alongside because they answer the
+// different question of whether any single call is pathological.
+//
+// DependencyType separates the kinds without needing to know the targets:
+//   SQL            — EF Core, via AddEntityFrameworkCoreInstrumentation
+//   Azure Service Bus — publish and receive, from the Azure SDK's own source
+//   HTTP           — outbound calls, from the distro's HttpClient instrumentation
+//
+// A dependency type MISSING from these results is a finding, not an absence.
+// If SQL never appears, EF Core instrumentation is not registered; if Service
+// Bus never appears, the publisher is the NoOp implementation and no message
+// is being sent at all. An empty row is evidence about the wiring.
+AppDependencies
+| where TimeGenerated > ago(24h)
+| summarize
+    calls    = sum(ItemCount),
+    totalMs  = sum(DurationMs),
+    p50      = round(percentile(DurationMs, 50), 1),
+    p99      = round(percentile(DurationMs, 99), 1),
+    failures = sumif(ItemCount, Success == false)
+    by DependencyType, Target, Name
+| extend
+    totalSeconds  = round(totalMs / 1000.0, 2),
+    msPerCall     = round(totalMs / calls, 1),
+    failureRatePct = round(100.0 * failures / calls, 2)
+| project DependencyType, Target, Name, calls, totalSeconds, msPerCall, p50, p99, failures, failureRatePct
+| order by totalMs desc
