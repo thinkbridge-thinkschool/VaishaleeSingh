@@ -227,6 +227,16 @@ POST /api/quotes/                   request        10.5      76002b3620d37bb8  (
       SQL :: SQL: quotes            dependency      0.9      ae0ef7bd5f4f0043  821d629fb050d0e5
 ```
 
+![End-to-end transaction: POST /api/quotes to Outbox publish to QuoteEventProcessor.ProcessMessage to SQL, under one operation id](trace-api-worker.png)
+
+The portal's own view of the same operation. Two things in it are worth
+pointing at, because both look like faults and neither is one. The worker row
+carries **Response code 0** — a Consumer span has no HTTP status, and
+`Successful request: true` sits beside it. And the custom properties read
+`messaging.operation: process` / `messaging.source.name: QuoteCreated`, which
+are the tags added by the fix; their presence is how you tell the running image
+contains it.
+
 Three `AppRequests` rows under one operation id: the HTTP call and two worker
 receives. Azure Monitor records a Consumer span as a *request*, because
 receiving a message is the worker's own incoming operation — so a second
