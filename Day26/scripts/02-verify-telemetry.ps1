@@ -339,19 +339,43 @@ foreach ($q in $queries) {
     $path = Join-Path $kqlDir $q.file
     if (-not (Test-Path $path)) { Note "Missing $($q.file)"; continue }
 
-    $text = Get-KqlQuery -Path $path
-    if ([string]::IsNullOrWhiteSpace($text)) { Note "$($q.file) is empty after stripping comments"; continue }
-
-    $result = Invoke-AzText @('monitor', 'log-analytics', 'query', '-w', $wsid,
-                              '--analytics-query', $text, '-o', 'table')
-
-    $outPath = Join-Path $outDir $q.out
     $header = @(
         "Day 26 -- $($q.title)"
-        "Query:  Day26/kql/$($q.file)   (verbatim; also deployed as a workspace saved search)"
+        "Query:  Day26/kql/$($q.file)   (executed verbatim from the file; also deployed as a workspace saved search)"
         "Run at: $(Get-Date -Format o)"
         ''
-    ) -join "`n"
+    ) -join "`n" 
+
+    # THE QUERY IS HANDED TO az AS A FILE, NOT AS A STRING ARGUMENT.
+    #
+    # az supports @<path> for any parameter value, and it reads the file
+    # itself -- so the newlines and the double quotes never pass through
+    # PowerShell's native-command argument handling at all. That handling is
+    # what has produced every wrong answer in this script today: newlines
+    # truncated the query after its first line, and embedded double quotes
+    # (Name !startswith "GET /health") were stripped, leaving a syntax error.
+    # A file has neither problem, and it means the .kql text az executes is
+    # byte-for-byte what is committed and deployed as a saved search.
+    $rawQuery = & az monitor log-analytics query -w $wsid `
+                      --analytics-query "@$path" -o table 2>&1
+    $queryExit = $LASTEXITCODE
+    $result = ($rawQuery -join "`n")
+
+    # AN ERROR AND AN EMPTY RESULT ARE NOT THE SAME THING, and conflating them
+    # is what cost most of today. Invoke-AzText returns $null on a non-zero
+    # exit, so a KQL syntax error arrived here as "no rows" -- which reads as a
+    # statement about the data and is actually a statement about the query.
+    if ($queryExit -ne 0) {
+        Note "$($q.title): THE QUERY FAILED (az exit $queryExit)"
+        foreach ($line in ($result -split "`r?`n" | Where-Object { $_ -match '\S' } | Select-Object -First 4)) {
+            Note "  $($line.Trim())"
+        }
+        ($header + "QUERY FAILED (az exit $queryExit)`n`n" + $result + "`n") |
+            Out-File (Join-Path $outDir $q.out) -Encoding utf8
+        continue
+    }
+
+    $outPath = Join-Path $outDir $q.out
 
     if ([string]::IsNullOrWhiteSpace($result)) {
         # An empty table is a RESULT, not an error, and the difference matters:
