@@ -239,18 +239,47 @@ operator remembers to select.
   would all be procedure rather than permission, and procedure is what gets
   bypassed at 2am.
 
-`production` is advanced by **fast-forward only**:
+### One tag per app, not one per release — which the first run proved
+
+The promotion was keyed on the release commit's sha, for both images. Preflight
+rejected it immediately:
+
+```
+OK    quotes-api:b2ee57546f24 exists in the dev registry
+FAIL  quotes-web:b2ee57546f24 is not in the dev registry
+```
+
+The API and the front end are built by **separate workflows with separate path
+filters**, deliberately — an Angular change must not rebuild and redeploy the
+API. So a commit touching only `Day7/piece2` produces `quotes-api:<sha>` and no
+`quotes-web:<sha>`. **There is no single tag both images share, and there never
+was**; a promotion keyed on one sha fails on whichever half the release did not
+touch.
+
+Each app now promotes the tag **its dev counterpart is currently running**,
+resolved off the live container app. That is stronger than a sha as well as
+correct: the running image is the only artefact that has actually been
+exercised, and "prod runs what dev runs" is what promoting dev to prod means. A
+tag can still be passed explicitly, for a rollback. Both the script and the
+workflow also refuse to promote `:latest` — unversioned, impossible to roll
+back to, and in this template it is the hello-world placeholder.
+
+The gate is unchanged and is still one query: an image only reaches the dev
+registry if the dev pipeline built it, and that pipeline only builds after the
+unit and integration tests pass. So "is this tag in the dev registry" is
+exactly "was this artefact tested".
+
+**What that costs, stated plainly:** the sha check used to double as
+enforcement that `production` was fast-forwarded, because a merge commit's sha
+carried no image. Resolving tags from the running dev app removes that
+side effect. Fast-forward is still how the branch should be advanced —
 
 ```
 git checkout production && git merge --ff-only main && git push
 ```
 
-The workflow enforces it by checking that the tag exists in the dev registry
-before importing. An image only lands there if the dev pipeline built it, and
-the dev pipeline only builds after the tests pass — so "is this tag in the dev
-registry" is exactly the question "was this commit tested and deployed to dev".
-A merge commit created on `production` has a sha that exists nowhere else, no
-image carries it, and the promotion stops with that as the reason.
+— but nothing automatic enforces it now. A branch protection rule requiring
+linear history on `production` is where that belongs, and it is not yet set.
 
 One trap worth writing down, because it breaks a working pipeline the moment
 the gate is added: a job declaring `environment: production` presents the OIDC

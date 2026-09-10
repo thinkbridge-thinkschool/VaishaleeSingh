@@ -73,8 +73,10 @@ jobs:
         include:
           - image: quotes-api
             app: quotes-api-prod
+            dev_app: quotes-api-dev
           - image: quotes-web
             app: quotes-web-prod
+            dev_app: quotes-web-dev
 
     steps:
       - name: Check the prod deployment variables are set
@@ -107,35 +109,61 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # THE REAL GATE ON WHAT MAY REACH PRODUCTION, and it is one query.
+      # WHICH TAG, AND WHY IT IS NOT THE COMMIT SHA.
       #
-      # The tag is a commit sha, and the image only exists in the dev registry
-      # if the dev pipeline built it -- which it only does after the unit and
-      # integration tests pass. So "does this tag exist in the dev registry" is
-      # exactly the question "was this commit tested and deployed to dev".
+      # The first version of this used ${GITHUB_SHA::12} for both images, and
+      # that is wrong for this repository. The API and the front end are built
+      # by SEPARATE workflows with separate path filters, deliberately -- an
+      # Angular change must not rebuild and redeploy the API. So a commit that
+      # touches only Day7/piece2 produces quotes-api:<sha> and NO
+      # quotes-web:<sha>, and a promotion keyed on one sha fails on whichever
+      # half the release did not touch. It did, on the first run:
       #
-      # It also enforces how `production` must be advanced: FAST-FORWARD it to
-      # a commit that is already on main. A merge commit created on production
-      # has a sha that exists nowhere else, so no image carries that tag and
-      # this step stops the deployment with the reason. That is deliberate -- a
-      # merge commit on the release branch is a commit production would run
-      # having never been built, let alone tested.
+      #   OK    quotes-api:b2ee57546f24 exists in the dev registry
+      #   FAIL  quotes-web:b2ee57546f24 is not in the dev registry
+      #
+      # There is no single tag both images share, and there never was. So each
+      # app promotes THE TAG ITS DEV COUNTERPART IS RUNNING, which is both
+      # correct and stronger: the running image is the only artefact that has
+      # actually been exercised, and "prod runs what dev runs" is what
+      # promoting dev to prod means. `inputs.tag` overrides it for a rollback.
+      #
+      # The gate is unchanged and still one query: an image only reaches the
+      # dev registry if the dev pipeline built it, and that pipeline only
+      # builds after the unit and integration tests pass.
       - name: Resolve the tag and confirm dev already built it
         id: tag
         run: |
           set -euo pipefail
           tag="${{ inputs.tag }}"
-          if [ -z "$tag" ]; then tag="${GITHUB_SHA::12}"; fi
-          echo "Promoting tag: $tag"
 
+          if [ -z "$tag" ]; then
+            dev_image=$(az containerapp show \
+              --name "${{ matrix.dev_app }}" --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+              --query "properties.template.containers[0].image" -o tsv)
+            echo "${{ matrix.dev_app }} is running: $dev_image"
+            tag="${dev_image##*:}"
+          fi
+
+          if [ -z "$tag" ]; then
+            echo "::error::Could not determine a tag to promote for ${{ matrix.image }}."
+            exit 1
+          fi
+
+          # A placeholder is not something to promote. Without this the
+          # hello-world image would be imported and rolled out as if it were
+          # the app -- green the whole way.
+          if [ "$tag" = "latest" ]; then
+            echo "::error::${{ matrix.dev_app }} is running a ':latest' tag, which is unversioned and cannot be rolled back to. Refusing to promote it."
+            exit 1
+          fi
+
+          echo "Promoting ${{ matrix.image }}:$tag"
           if ! az acr repository show-tags \
                  --name "${DEV_REGISTRY%%.*}" \
                  --repository "${{ matrix.image }}" \
                  --query "contains(@, '$tag')" -o tsv | grep -qi true; then
             echo "::error::${{ matrix.image }}:$tag is not in the dev registry, so it was never built or tested."
-            echo "::error::Advance the production branch by FAST-FORWARDING it to a commit already on main:"
-            echo "::error::  git checkout production && git merge --ff-only main && git push"
-            echo "::error::A merge commit here has a sha no image carries, which is what this check is for."
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"

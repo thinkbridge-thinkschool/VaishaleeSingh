@@ -63,10 +63,25 @@ param(
     [string] $DevResourceGroup = 'thinkschool-dev-rg',
     [string] $DevRegistry      = 'cr7mo4cimyk4vnk',
 
-    # The tag to promote. Empty means "whatever the dev API is running right
-    # now", read off the live container app rather than guessed -- the running
-    # image is the only artifact that has actually been exercised.
-    [string] $Tag              = '',
+    # ONE TAG PER APP, NOT ONE TAG PER RELEASE, and the first run of this
+    # script is what proved the difference.
+    #
+    # The API and the front end are built by SEPARATE workflows with separate
+    # path filters, deliberately: an Angular change must not rebuild and
+    # redeploy the API. So a commit that touches only Day7/piece2 produces
+    # quotes-api:<sha> and NO quotes-web:<sha> -- which means there is no
+    # single tag both images share, and a promotion keyed on one commit sha
+    # fails on whichever half the release did not touch. It did:
+    #
+    #   OK    quotes-api:b2ee57546f24 exists in the dev registry
+    #   FAIL  quotes-web:b2ee57546f24 is not in the dev registry
+    #
+    # Empty means "whatever that app is running in dev right now", read off the
+    # live container app. That is also the better answer than a sha: the
+    # running image is the only artifact that has actually been exercised, and
+    # "prod now runs what dev runs" is what promoting dev to prod means.
+    [string] $ApiTag           = '',
+    [string] $WebTag           = '',
 
     [switch] $IAcceptTheCost
 )
@@ -177,25 +192,53 @@ if ($null -eq $loc -or @($loc).Count -eq 0) {
     Ok "Region $Location is available to this subscription"
 }
 
-# --- The images must already exist in the dev registry ---
-if ([string]::IsNullOrWhiteSpace($Tag)) {
-    $running = Invoke-AzText @('containerapp', 'show', '-n', 'quotes-api-dev', '-g', $DevResourceGroup,
-                               '--query', 'properties.template.containers[0].image', '-o', 'tsv')
-    if ($running.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($running.Text)) {
-        Die 'Could not read the image the dev API is running, and no -Tag was given.'
-    }
-    if ($running.Text -match ':([^:]+)$') { $Tag = $Matches[1] }
-    Ok "Tag from the running dev API: $Tag"
+# --- Resolve each app's tag from what dev is running, then verify it ---
+function Get-RunningTag {
+    param([Parameter(Mandatory)] [string] $DevApp)
+    $r = Invoke-AzText @('containerapp', 'show', '-n', $DevApp, '-g', $DevResourceGroup,
+                         '--query', 'properties.template.containers[0].image', '-o', 'tsv')
+    if ($r.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($r.Text)) { return '' }
+    # Matched from the END, because the registry host contains no colon but a
+    # port would: cr….azurecr.io/quotes-api:abc123 -> abc123.
+    if ($r.Text -match ':([^:/]+)$') { return $Matches[1] }
+    return ''
 }
 
-foreach ($image in @('quotes-api', 'quotes-web')) {
-    $tags = Invoke-AzJson @('acr', 'repository', 'show-tags', '--name', $DevRegistry,
-                            '--repository', $image, '-o', 'json')
-    if ($null -eq $tags) { Die "Could not list tags for $image in $DevRegistry." }
-    if (@($tags) -notcontains $Tag) {
-        Die "$image`:$Tag is not in the dev registry, so it was never built or tested. Promote a tag dev has actually run."
+# image name, dev app, prod app, and the tag for this promotion.
+$promotions = @(
+    [pscustomobject]@{ Image = 'quotes-api'; DevApp = 'quotes-api-dev'; ProdApp = $ApiContainerApp; Tag = $ApiTag }
+    [pscustomobject]@{ Image = 'quotes-web'; DevApp = 'quotes-web-dev'; ProdApp = $WebContainerApp; Tag = $WebTag }
+)
+
+foreach ($p in $promotions) {
+    if ([string]::IsNullOrWhiteSpace($p.Tag)) {
+        $p.Tag = Get-RunningTag $p.DevApp
+        if ([string]::IsNullOrWhiteSpace($p.Tag)) {
+            Die "Could not read the image $($p.DevApp) is running, and no tag was given for $($p.Image)."
+        }
+        Ok "$($p.Image): promoting $($p.Tag), the tag $($p.DevApp) is running"
+    } else {
+        Ok "$($p.Image): promoting $($p.Tag) (given)"
     }
-    Ok "$image`:$Tag exists in the dev registry"
+
+    # THE GATE, and it is one query. An image only reaches the dev registry if
+    # the dev pipeline built it, and that pipeline only builds after the unit
+    # and integration tests pass -- so "is this tag in the dev registry" is
+    # exactly "was this artefact tested".
+    $tags = Invoke-AzJson @('acr', 'repository', 'show-tags', '--name', $DevRegistry,
+                            '--repository', $p.Image, '-o', 'json')
+    if ($null -eq $tags) { Die "Could not list tags for $($p.Image) in $DevRegistry." }
+    if (@($tags) -notcontains $p.Tag) {
+        Die "$($p.Image):$($p.Tag) is not in the dev registry, so it was never built or tested."
+    }
+    Ok "$($p.Image):$($p.Tag) exists in the dev registry"
+
+    # A placeholder in dev is not something to promote. Without this check the
+    # hello-world image would be imported into prod and rolled out as if it
+    # were the app -- green the whole way.
+    if ($p.Tag -eq 'latest') {
+        Die "$($p.DevApp) is running a ':latest' tag, which is unversioned and cannot be rolled back to. Refusing to promote it."
+    }
 }
 
 # ===========================================================================
@@ -326,14 +369,14 @@ Step '7. Import the tested images into prod''s registry'
 if ([string]::IsNullOrWhiteSpace($prodRegistry)) {
     Die 'No prod registry name; cannot import. Read it from the stack outputs and re-run with the import step by hand.'
 }
-foreach ($image in @('quotes-api', 'quotes-web')) {
+foreach ($p in $promotions) {
     # Server-side copy: no pull, no push, digest preserved. Cross-region is
     # fine, which matters because prod is in a different region from dev.
     $i = Invoke-AzText @('acr', 'import', '--name', $prodRegistry,
-                         '--source', "$DevRegistry.azurecr.io/$image`:$Tag",
-                         '--image', "$image`:$Tag", '--force')
-    if ($i.ExitCode -ne 0) { Write-Host $i.Text; Die "Importing $image`:$Tag failed." }
-    Ok "Imported $image`:$Tag"
+                         '--source', "$DevRegistry.azurecr.io/$($p.Image):$($p.Tag)",
+                         '--image', "$($p.Image):$($p.Tag)", '--force')
+    if ($i.ExitCode -ne 0) { Write-Host $i.Text; Die "Importing $($p.Image):$($p.Tag) failed." }
+    Ok "Imported $($p.Image):$($p.Tag)"
 }
 
 # ===========================================================================
@@ -350,11 +393,11 @@ if ([string]::IsNullOrWhiteSpace($sqlFqdn) -or [string]::IsNullOrWhiteSpace($ide
 # ===========================================================================
 Step '9. Roll both apps onto the imported images'
 # ===========================================================================
-foreach ($pair in @(@($ApiContainerApp, 'quotes-api'), @($WebContainerApp, 'quotes-web'))) {
-    $u = Invoke-AzText @('containerapp', 'update', '-n', $pair[0], '-g', $ResourceGroup,
-                         '--image', "$prodRegistryHost/$($pair[1])`:$Tag", '-o', 'none')
-    if ($u.ExitCode -ne 0) { Write-Host $u.Text; Die "Rolling $($pair[0]) failed." }
-    Ok "$($pair[0]) -> $($pair[1]):$Tag"
+foreach ($p in $promotions) {
+    $u = Invoke-AzText @('containerapp', 'update', '-n', $p.ProdApp, '-g', $ResourceGroup,
+                         '--image', "$prodRegistryHost/$($p.Image):$($p.Tag)", '-o', 'none')
+    if ($u.ExitCode -ne 0) { Write-Host $u.Text; Die "Rolling $($p.ProdApp) failed." }
+    Ok "$($p.ProdApp) -> $($p.Image):$($p.Tag)"
 }
 
 # ===========================================================================

@@ -139,6 +139,15 @@ param keyVaultSoftDeleteRetentionInDays = 90
 // redirect URIs and one app whose tokens are accepted by both environments is
 // how a dev token ends up valid in production.
 
+param azureAdTenantId = '8d46a076-d093-416d-a57b-8692cde13bf8'
+param azureAdClientId = '5cb4e24e-86b4-4287-9f6d-4da55bcae1ac'
+
+// api://<appId>, the Application ID URI -- NOT the scope. Entra puts the
+// resource's app ID URI in the token's aud claim and carries the scope
+// separately in scp, so the previous value ('api://quotes-api/access') would
+// have failed audience validation on every genuine token.
+param azureAdAudience = 'api://5cb4e24e-86b4-4287-9f6d-4da55bcae1ac'
+
 // --- Alerting (Day 26) ----------------------------------------------------
 // Stricter than dev, and for a reason rather than for tidiness: production
 // does not scale to zero, so its five-minute windows carry real traffic and
