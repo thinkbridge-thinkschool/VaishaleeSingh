@@ -587,8 +587,31 @@ Step '6. Seed the JWT signing key into prod''s vault'
 # ROTATION, not an idempotent write: it generates a new key and every token
 # signed with the old one stops validating. Running it twice in one promotion
 # would invalidate the key the deployment just succeeded with.
+# THE CONDITION IS "DOES THE SECRET EXIST", NOT "DID STEP 4 SEED IT".
+#
+# It was the latter, and that was wrong in the case where everything goes
+# right: when the create succeeds first time, step 4's recovery never runs,
+# the flag stays false, and this step seeds a secret that already exists --
+# which is a ROTATION. The run that produced this comment did exactly that,
+# and the seed script said so plainly:
+#
+#   'jwt-secret' already exists. This will add a NEW VERSION -- a rotation.
+#   Every access token already issued ... will stop validating.
+#
+# It was harmless there because prod had no users yet. It would not be
+# harmless on a promotion into a live environment, and "harmless when we tried
+# it" is not a property to rely on. Ask the vault instead of asking a flag.
+$secretExists = $false
+if (-not [string]::IsNullOrWhiteSpace($vaultName)) {
+    $probe = Invoke-AzText @('keyvault', 'secret', 'show', '--vault-name', $vaultName,
+                             '--name', 'jwt-secret', '--query', 'id', '-o', 'tsv')
+    $secretExists = ($probe.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($probe.Text))
+}
+
 if ($script:secretAlreadySeeded) {
-    Ok 'Already seeded during step 4; not re-running (a re-run rotates the key).'
+    Ok 'Seeded during step 4; not re-running.'
+} elseif ($secretExists) {
+    Ok 'A signing key is already present; not re-running (that would rotate it and sign out every user).'
 } elseif ([string]::IsNullOrWhiteSpace($vaultName)) {
     Note 'No vault name; skipping. Run Day25/scripts/01-seed-jwt-secret.ps1 by hand.'
 } else {
