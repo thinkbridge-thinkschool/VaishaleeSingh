@@ -1,8 +1,11 @@
 ﻿Day 26 -- p50/p95/p99 by endpoint
 Query:  Day26/kql/01-latency-by-endpoint.kql   (executed verbatim from the file; also deployed as a workspace saved search)
-Run at: 2026-09-10T12:35:56.0740793+05:30
-Endpoint              TableName      FailureRatePct    Failures    P50    P95    P99    Requests
---------------------  -------------  ----------------  ----------  -----  -----  -----  ----------
-POST /api/auth/login  PrimaryResult  83.33             10          12     607.3  607.3  12
-GET /api/quotes/      PrimaryResult  93.55             29          0.7    54.6   71.4   31
+Run at: 2026-09-10T13:51:35.8178736+05:30
+Endpoint                            TableName      FailureRatePct    Failures    P50    P95    P99    Requests
+----------------------------------  -------------  ----------------  ----------  -----  -----  -----  ----------
+POST /api/auth/login                PrimaryResult  70.59             12          22.6   607.3  607.3  17
+POST /api/auth/register             PrimaryResult  83.33             5           2.8    520.4  520.4  6
+POST /api/quotes/                   PrimaryResult  0                 0           10.8   15.2   242.2  27
+QuoteEventProcessor.ProcessMessage  PrimaryResult  0                 0           91.3   138.7  157.1  52
+GET /api/quotes/                    PrimaryResult  80                48          0.7    7.7    71.4   60
 
