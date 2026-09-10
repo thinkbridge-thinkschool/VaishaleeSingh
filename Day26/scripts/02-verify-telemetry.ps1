@@ -123,22 +123,70 @@ if (-not $SkipTraffic) {
     Write-Host ''
     Write-Host 'Generating traffic' -ForegroundColor Cyan
 
-    # Reads first: they populate the endpoint latency table with something
-    # other than a single write.
-    1..10 | ForEach-Object { curl.exe -s -o NUL "$ApiBaseUrl/api/quotes" 2>$null }
-    1..3  | ForEach-Object { curl.exe -s -o NUL "$ApiBaseUrl/health/ready" 2>$null }
-    Ok 'Reads sent.'
+    # WARM-UP FIRST, AND ITS STATUS IS REPORTED. minReplicas is 0, so the
+    # first request after an idle period cold-starts the container and can
+    # take half a minute. Firing ten requests at a scaled-to-zero app and
+    # discarding the output produces "reads sent" whether or not any of them
+    # arrived -- which is how the last run reported success and then found no
+    # telemetry at all.
+    $warm = curl.exe -s -o NUL -w '%{http_code}' --max-time 120 "$ApiBaseUrl/health/ready" 2>$null
+    if ($warm -ne '200') {
+        Note "Warm-up returned HTTP $warm. The app may be cold or unhealthy;"
+        Note 'everything below will be thin or empty if it never served a request.'
+    } else {
+        Ok 'App is warm (health/ready 200).'
+    }
+
+    # Reads: they populate the endpoint latency table with something other
+    # than a single write. Status codes are counted rather than discarded.
+    $readCodes = @()
+    1..10 | ForEach-Object {
+        $readCodes += (curl.exe -s -o NUL -w '%{http_code}' --max-time 60 "$ApiBaseUrl/api/quotes" 2>$null)
+    }
+    $ok = @($readCodes | Where-Object { $_ -eq '200' }).Count
+    Ok "Reads sent: $ok of 10 returned 200 (codes: $((($readCodes | Sort-Object -Unique) -join ', ')))"
 
     # A deliberately synthetic identity. Deterministic per day so repeated runs
     # reuse one account rather than accumulating a new row every time.
     $probeEmail = "day26-probe-$(Get-Date -Format yyyyMMdd)@example.invalid"
     $probePass  = 'Day26-Probe-' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Date -Format yyyyMMdd))) + '!aA1'
 
+    # BOTH CALLS REPORT THEIR STATUS AND BODY. The previous version discarded
+    # them and said only "could not obtain a token", which is a symptom and
+    # not a cause: a 400 from validation, a 409 from an existing account, a
+    # 502 from a cold container and a timeout are four different problems with
+    # four different fixes, and they were indistinguishable.
     $regBody = @{ email = $probeEmail; password = $probePass } | ConvertTo-Json -Compress
-    $null = curl.exe -s -o NUL -X POST "$ApiBaseUrl/api/auth/register" -H "Content-Type: application/json" -d $regBody 2>$null
+    $regCode = curl.exe -s -o "$env:TEMP\day26-register.json" -w '%{http_code}' --max-time 60 `
+                  -X POST "$ApiBaseUrl/api/auth/register" `
+                  -H "Content-Type: application/json" -d $regBody 2>$null
+    $regBodyText = ''
+    if (Test-Path "$env:TEMP\day26-register.json") { $regBodyText = (Get-Content "$env:TEMP\day26-register.json" -Raw) }
+
+    # 409 is success for this purpose: the account already exists from an
+    # earlier run today, which is exactly what the deterministic name is for.
+    if ($regCode -eq '200' -or $regCode -eq '201') { Ok "register -> HTTP $regCode" }
+    elseif ($regCode -eq '409')                    { Ok  "register -> HTTP 409 (account already exists today, fine)" }
+    else {
+        Note "register -> HTTP $regCode"
+        if (-not [string]::IsNullOrWhiteSpace($regBodyText)) { Note "  body: $($regBodyText.Trim())" }
+    }
 
     $loginBody = @{ email = $probeEmail; password = $probePass } | ConvertTo-Json -Compress
-    $loginRaw = curl.exe -s -X POST "$ApiBaseUrl/api/auth/login" -H "Content-Type: application/json" -d $loginBody 2>$null
+    $loginRaw = curl.exe -s -w "`nHTTP:%{http_code}" --max-time 60 `
+                   -X POST "$ApiBaseUrl/api/auth/login" `
+                   -H "Content-Type: application/json" -d $loginBody 2>$null
+
+    $loginCode = 'unknown'
+    if ($loginRaw -match 'HTTP:(\d+)\s*$') {
+        $loginCode = $Matches[1]
+        $loginRaw = $loginRaw -replace 'HTTP:\d+\s*$', ''
+    }
+    if ($loginCode -eq '200') { Ok "login -> HTTP 200" }
+    else {
+        Note "login -> HTTP $loginCode"
+        if (-not [string]::IsNullOrWhiteSpace($loginRaw)) { Note "  body: $($loginRaw.Trim())" }
+    }
 
     $token = $null
     if (-not [string]::IsNullOrWhiteSpace($loginRaw)) {

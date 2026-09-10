@@ -28,8 +28,27 @@ param actionGroupShortName string
 @description('Where notifications go. An operator address, not a credential — but it is still personal data, so it lives in the parameter file rather than in this template.')
 param alertEmailAddress string
 
-@description('Resource ID of the Application Insights component the rule queries.')
-param applicationInsightsId string
+// SCOPED TO THE WORKSPACE, NOT THE APP INSIGHTS COMPONENT, AND THE FIRST
+// DEPLOYMENT FAILED BECAUSE IT WAS THE OTHER WAY ROUND:
+//
+//   BadRequest: 'where' operator: Failed to resolve table or column
+//   expression named 'AppRequests'. A semantic error occurred.
+//
+// A scheduled query rule VALIDATES ITS QUERY AT DEPLOY TIME against the
+// schema of whatever it is scoped to, and the two schemas are different
+// names for the same data: an Application Insights component exposes
+// `requests` / `dependencies` / `traces`, while the Log Analytics workspace
+// behind it exposes `AppRequests` / `AppDependencies` / `AppTraces`. The
+// component here is workspace-based (IngestionMode: LogAnalytics), so the
+// data physically lives in the workspace either way.
+//
+// Choosing the workspace keeps ONE schema across everything in this day: the
+// four .kql files, the saved searches, this rule, and the verification script
+// all read AppRequests. Two schemas would mean the alert query and the
+// investigation query could not be the same text, which is the property that
+// makes the alert trustworthy.
+@description('Resource ID of the Log Analytics workspace the rule queries. Not the App Insights component: the query is validated against the scope\'s schema, and only the workspace exposes the App* table names.')
+param logAnalyticsWorkspaceId string
 
 @description('Location for the rule. Action groups are always global.')
 param location string
@@ -81,7 +100,7 @@ resource errorRateAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
     severity: 2
     enabled: true
 
-    scopes: [ applicationInsightsId ]
+    scopes: [ logAnalyticsWorkspaceId ]
 
     // Evaluated every five minutes over a five-minute window: consecutive,
     // non-overlapping. A window longer than the frequency re-reads the same

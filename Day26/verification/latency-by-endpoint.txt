@@ -1,0 +1,5 @@
+﻿Day 26 -- p50/p95/p99 by endpoint
+Query:  Day26/kql/01-latency-by-endpoint.kql   (verbatim; also deployed as a workspace saved search)
+Run at: 2026-09-10T11:55:01.1553730+05:30
+(no rows)
+
