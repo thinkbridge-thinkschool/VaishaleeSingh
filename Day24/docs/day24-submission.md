@@ -139,13 +139,65 @@ Live endpoints (dev):
 
 ## Deploy output — prod
 
-**Not run, and the reason is a decision rather than an omission.** The
-promotion path is built and validated; creating the stack is one command
-behind an explicit switch. What stopped it is cost, stated below.
+**Deployed and verified.** Stack `quotes-prod`, subscription
+`85567e22-…`, resource group `thinkschool-prod-rg`, region `uaenorth`.
 
-Reading the prod parameters properly turned up five things that would each
-have produced a prod environment that deployed green and did not work. They
-are worth more than a second copy of the dev deploy log.
+```
+quotes-api-prod--0000001   Running   100%   crwhppc5qu7yzzg.azurecr.io/quotes-api:b2ee57546f24
+```
+
+- API `https://quotes-api-prod.greenhill-88fb93d9.uaenorth.azurecontainerapps.io`
+- Web `https://quotes-web-prod.greenhill-88fb93d9.uaenorth.azurecontainerapps.io`
+
+Registry `crwhppc5qu7yzzg`, vault `kv-quotes-prod`, SQL
+`sql-quotes-whppc5qu7yzzg`, identity `id-quotes-api-whppc5qu7yzzg` — all
+prod's own. Three migrations applied
+(`Day24/verification/sqlserver-migrations-applied.txt`), and the zero-secrets
+proof re-run against prod: **13 passed, 0 failed**
+(`Day25/verification/no-secrets-prod-AFTER.txt`).
+
+The image was **promoted, not rebuilt**: `az acr import` copies the manifest
+server-side from the dev registry, so the bytes prod runs are the bytes the
+tests passed on. A rebuild on a release branch compiles the same source into a
+different binary — different base digest, different SDK patch — and ships
+something no test touched.
+
+### It took eight attempts, and the failures are the content
+
+Nothing about the first seven was random. Each named a real property of this
+subscription, this template or this design that no document stated, and the
+preflight now checks the ones that are checkable.
+
+| # | Stopped by | What it actually meant |
+|---|---|---|
+| 1–3 | `unrecognized arguments`, `--yes` on validate | My own command lines. `--deny-settings-excluded-actions` takes **one** space-separated string, not several arguments — the help says so only in an example. |
+| 4 | `MaxNumberOfGlobalEnvironmentsInSubExceeded` | One Container Apps environment per **subscription**, not per region — which is what `main.bicep`'s own description claimed, and why prod chose a second region expecting to get a second environment. |
+| 5 | `DeploymentStackInNonTerminalState` | A failed create tears down what it made (`actionOnUnmanage: deleteAll`), so the stack is busy for minutes afterwards and cannot be updated. |
+| 6 | `(Forbidden)` on the vault | The vault is created empty by design, so somebody must seed it — and on a new RBAC vault the operator has no write access. Granted by the template now, because a hand-granted assignment dies with the vault on the next failure. |
+| 7 | `softDeleteRetentionInDays ... can't be modified` | Two vault properties are **write-once**: retention is immutable once set and purge protection can only ever be turned on. The first attempt's vault could not be corrected, only abandoned. |
+| 8 | `Client with IP ... is not allowed` | `main.dev.bicepparam` has carried a `SQL_CLIENT_IP` firewall block since Day 23; prod's never got one, so its server admitted nobody. |
+| 9 | `CrashLoopBackOff` | The app's own startup check: *"The SQL Server database has no applied migrations. They are applied by the deployment, not by this app."* Correct design — two replicas starting together would race a self-migrating app — and the promotion had no such step. Now step 8b. |
+
+Number 7 was the expensive one, and not in time. Purge protection was `true`
+with 90-day retention, argued in a comment as the right production trade. It
+is the wrong trade for an environment whose lifecycle *includes* teardown: a
+deleted vault soft-deletes, cannot be purged during the window, and holds its
+deterministically-derived name for ninety days. A few more failed attempts
+would have locked this environment out of its own vault name for a quarter of
+a year. `kv-whppc5qu7yzzg` is abandoned for exactly that reason and carries
+purge protection permanently, because that flag has no off switch.
+
+Two of my diagnoses along the way were wrong and both were guesses: I read
+"even the hello-world placeholder fails to start" as proof the fault lay
+outside the app, when `CrashLoopBackOff` means the container ran and exited;
+and I proposed a core-quota explanation that the usage API showed was not in
+play at all. Two commands — the replica-level reason and the console log —
+answered it, and neither guess was needed.
+
+### What reading the parameters found before any of that
+
+Five things that would each have produced a prod environment that deployed
+green and did not work.
 
 **1. Prod would have run Microsoft's hello-world container.** With
 `quotesApiExists = false` and `webAppExists = false`, `main.bicep` resolves the
@@ -188,7 +240,7 @@ and never becomes ready. `main.bicep` now emits `AZURE_KEY_VAULT_NAME` so the
 promotion script can find the vault it must seed rather than reading it out of
 the portal, which is how a secret ends up in the wrong environment's vault.
 
-**5. Cost, which is why this is not run.** Prod is deliberately not dev, and
+**5. Cost, which is why this is torn down between exercises.** Prod is deliberately not dev, and
 four of the differences bill whether or not anyone uses the app:
 
 | | dev | prod |
@@ -212,7 +264,7 @@ there is no password path, so this is not a credential exposure — but the
 server is still reachable from any address the firewall rules permit, and for
 production that deserves a private endpoint or an explicit decision.
 
-### Promoting, once the cost is accepted
+### Standing prod up, and taking it down
 
 ```
 ./Day24/scripts/05-promote-prod.ps1 -WhatIf          # preflight + validate only
