@@ -1,6 +1,6 @@
 ﻿Day 26 -- Dependency breakdown by total time
 Query:  Day26/kql/02-dependency-breakdown.kql   (executed verbatim from the file; also deployed as a workspace saved search)
-Run at: 2026-09-10T12:33:30.2756053+05:30
+Run at: 2026-09-10T12:35:59.7693137+05:30
 DependencyType          Name                             TableName      Target                                                           Calls    FailureRatePct    Failures    MsPerCall    P50    P99    TotalSeconds
 ----------------------  -------------------------------  -------------  ---------------------------------------------------------------  -------  ----------------  ----------  -----------  -----  -----  --------------
 SQL                     SQL: quotes                      PrimaryResult  sql-quotes-7mo4cimyk4vnk.database.windows.net | quotes           1612     0                 0           3.1          1.1    35.2   5.05
