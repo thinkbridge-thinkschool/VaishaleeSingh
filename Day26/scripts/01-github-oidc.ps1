@@ -244,7 +244,29 @@ function Grant {
 }
 
 $acrScope = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.ContainerRegistry/registries/$Registry"
+
+# ACRPUSH ALONE IS NOT ENOUGH, AND THE FAILURE IS ACTIVELY MISLEADING.
+#
+# AcrPush grants DATA-PLANE actions only -- registries/pull/read and
+# registries/push/write. It does not grant
+# Microsoft.ContainerRegistry/registries/read, the MANAGEMENT-plane read that
+# `az acr login` performs first to resolve the registry before authenticating
+# to it. Without it the command reports:
+#
+#   The resource with name 'cr...' and type
+#   Microsoft.ContainerRegistry/registries could not be found in subscription
+#
+# COULD NOT BE FOUND, not "access denied": ARM answers 404 rather than 403 for
+# resources you cannot read, deliberately, so that permissions cannot be used
+# to probe what exists. The registry is there and the name is right; the
+# principal simply cannot see it. Ten minutes go into checking the name and
+# the subscription id before suspecting the role.
+#
+# Reader at the registry scope rather than at the resource group: this
+# principal needs to see one resource, and Day 25 spent a day establishing
+# that scope is where least privilege actually lives.
 Grant -Role 'AcrPush' -Scope $acrScope -What "registry $Registry"
+Grant -Role 'Reader'  -Scope $acrScope -What "registry $Registry (ARM read, required by az acr login)"
 
 foreach ($appName in $ContainerApps) {
     $scope = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.App/containerApps/$appName"
