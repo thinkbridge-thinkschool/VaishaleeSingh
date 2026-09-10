@@ -1,5 +1,5 @@
 ﻿Day 26 -- Dependency breakdown by total time
 Query:  Day26/kql/02-dependency-breakdown.kql   (verbatim; also deployed as a workspace saved search)
-Run at: 2026-09-10T11:55:05.8080896+05:30
+Run at: 2026-09-10T12:30:01.9035213+05:30
 (no rows)
 

@@ -356,9 +356,21 @@ foreach ($q in $queries) {
     # (Name !startswith "GET /health") were stripped, leaving a syntax error.
     # A file has neither problem, and it means the .kql text az executes is
     # byte-for-byte what is committed and deployed as a saved search.
-    $rawQuery = & az monitor log-analytics query -w $wsid `
-                      --analytics-query "@$path" -o table 2>&1
-    $queryExit = $LASTEXITCODE
+    # ErrorActionPreference LOWERED FOR THE CALL, for the third time today.
+    # With it at 'Stop', anything a native command writes to stderr becomes a
+    # TERMINATING error -- so az reporting a bad query killed the script
+    # instead of letting the branch below read the message and carry on to the
+    # next query. Exactly the trap noted in 01-github-oidc.ps1, and I wrote
+    # this call without the guard anyway.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $rawQuery = & az monitor log-analytics query -w $wsid `
+                        --analytics-query "@$path" -o table 2>&1
+        $queryExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+    }
     $result = ($rawQuery -join "`n")
 
     # AN ERROR AND AN EMPTY RESULT ARE NOT THE SAME THING, and conflating them

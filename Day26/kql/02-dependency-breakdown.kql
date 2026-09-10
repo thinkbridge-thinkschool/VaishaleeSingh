@@ -33,4 +33,12 @@ AppDependencies
     msPerCall     = round(totalMs / calls, 1),
     failureRatePct = round(100.0 * failures / calls, 2)
 | project DependencyType, Target, Name, calls, totalSeconds, msPerCall, p50, p99, failures, failureRatePct
-| order by totalMs desc
+// ORDERED BY totalSeconds, NOT totalMs, AND THE DIFFERENCE IS NOT COSMETIC.
+// This said `order by totalMs desc` and the service rejected the whole query
+// with "(BadArgumentError) The request had some invalid properties" -- because
+// `project` DISCARDS every column it does not list, so totalMs no longer
+// exists by the time order by asks for it. The sibling query orders by p99,
+// which it does project, which is why that one ran and this one did not.
+// totalSeconds is the same quantity in different units, so the ordering is
+// unchanged.
+| order by totalSeconds desc

@@ -1,5 +1,5 @@
 ﻿Day 26 -- Distributed trace: API to worker to DB
 Query:  Day26/kql/04-trace-stitch.kql   (verbatim; also deployed as a workspace saved search)
-Run at: 2026-09-10T11:55:14.6454752+05:30
+Run at: 2026-09-10T12:30:03.8033658+05:30
 (no rows)
 

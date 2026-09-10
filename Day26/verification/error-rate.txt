@@ -1,5 +1,5 @@
 ﻿Day 26 -- Error rate (the alert query)
 Query:  Day26/kql/03-error-rate.kql   (verbatim; also deployed as a workspace saved search)
-Run at: 2026-09-10T11:55:10.4742005+05:30
+Run at: 2026-09-10T12:30:02.8533358+05:30
 (no rows)
 
