@@ -137,14 +137,13 @@ if (-not $SkipTraffic) {
         Ok 'App is warm (health/ready 200).'
     }
 
-    # Reads: they populate the endpoint latency table with something other
-    # than a single write. Status codes are counted rather than discarded.
-    $readCodes = @()
-    1..10 | ForEach-Object {
-        $readCodes += (curl.exe -s -o NUL -w '%{http_code}' --max-time 60 "$ApiBaseUrl/api/quotes" 2>$null)
-    }
-    $ok = @($readCodes | Where-Object { $_ -eq '200' }).Count
-    Ok "Reads sent: $ok of 10 returned 200 (codes: $((($readCodes | Sort-Object -Unique) -join ', ')))"
+    # READS COME AFTER AUTHENTICATION, because /api/quotes requires it. The
+    # previous run reported "Reads sent: 0 of 10 returned 200 (codes: 401)" --
+    # ten rejected requests. They are still recorded as requests, so they were
+    # not useless, but a latency table built entirely from 401s describes the
+    # authentication middleware rather than the endpoint. The reads are moved
+    # below the login for that reason.
+
 
     # A deliberately synthetic identity. Deterministic per day so repeated runs
     # reuse one account rather than accumulating a new row every time.
@@ -156,10 +155,23 @@ if (-not $SkipTraffic) {
     # not a cause: a 400 from validation, a 409 from an existing account, a
     # 502 from a cold container and a timeout are four different problems with
     # four different fixes, and they were indistinguishable.
-    $regBody = @{ email = $probeEmail; password = $probePass } | ConvertTo-Json -Compress
+    # THE JSON GOES THROUGH A FILE, AND THAT IS WHY register RETURNED 400.
+    #
+    # `curl.exe -d '{"email":"..."}'` from PowerShell does not send that JSON.
+    # PowerShell strips the double quotes on the way to a native command, so
+    # curl receives {email:...,password:...}, the API cannot parse it, and the
+    # answer is a 400 with an empty body -- which reads like a validation
+    # failure on values that are in fact fine.
+    #
+    # 01-github-oidc.ps1 already passes Graph bodies through a file for exactly
+    # this reason. I knew the hazard and still wrote it inline here.
+    $regFile = Join-Path $env:TEMP 'day26-register-body.json'
+    (@{ email = $probeEmail; password = $probePass } | ConvertTo-Json -Compress) |
+        Out-File $regFile -Encoding ascii -NoNewline
+
     $regCode = curl.exe -s -o "$env:TEMP\day26-register.json" -w '%{http_code}' --max-time 60 `
                   -X POST "$ApiBaseUrl/api/auth/register" `
-                  -H "Content-Type: application/json" -d $regBody 2>$null
+                  -H "Content-Type: application/json" --data-binary "@$regFile" 2>$null
     $regBodyText = ''
     if (Test-Path "$env:TEMP\day26-register.json") { $regBodyText = (Get-Content "$env:TEMP\day26-register.json" -Raw) }
 
@@ -172,10 +184,25 @@ if (-not $SkipTraffic) {
         if (-not [string]::IsNullOrWhiteSpace($regBodyText)) { Note "  body: $($regBodyText.Trim())" }
     }
 
-    $loginBody = @{ email = $probeEmail; password = $probePass } | ConvertTo-Json -Compress
+    $loginFile = Join-Path $env:TEMP 'day26-login-body.json'
+    (@{ email = $probeEmail; password = $probePass } | ConvertTo-Json -Compress) |
+        Out-File $loginFile -Encoding ascii -NoNewline
+
     $loginRaw = curl.exe -s -w "`nHTTP:%{http_code}" --max-time 60 `
                    -X POST "$ApiBaseUrl/api/auth/login" `
-                   -H "Content-Type: application/json" -d $loginBody 2>$null
+                   -H "Content-Type: application/json" --data-binary "@$loginFile" 2>$null
+
+    # JOINED TO ONE STRING BEFORE -match, and this crashed the last run:
+    #
+    #   The variable '$Matches' cannot be retrieved because it has not been set.
+    #
+    # curl's multi-line output arrives as a string ARRAY, and -match against an
+    # array behaves as a FILTER -- it returns the matching elements and never
+    # populates $Matches. The if() was therefore truthy (a non-empty array)
+    # while $Matches stayed unset, and Set-StrictMode turned reading it into a
+    # terminating error. Against a single string, -match is a boolean and does
+    # populate $Matches.
+    $loginRaw = ($loginRaw -join "`n")
 
     $loginCode = 'unknown'
     if ($loginRaw -match 'HTTP:(\d+)\s*$') {
@@ -205,10 +232,38 @@ if (-not $SkipTraffic) {
         Note 'Re-run with credentials that work, or create a quote by hand first.'
     } else {
         Ok 'Authenticated as the probe account.'
-        $quote = @{ text = "Day 26 telemetry probe $(Get-Date -Format o)"; author = 'day26-probe' } | ConvertTo-Json -Compress
-        $null = curl.exe -s -o NUL -X POST "$ApiBaseUrl/api/quotes" `
-                    -H "Content-Type: application/json" -H "Authorization: Bearer $token" -d $quote 2>$null
-        Ok 'Quote created -- this is the request that should span API, Service Bus and worker.'
+        # Through a file, like the other two. This is THE request the whole
+        # trace-stitch verdict depends on, so a silently mangled body here
+        # would produce a NOT CONFIRMED that blamed traceparent for a
+        # PowerShell quoting problem.
+        $quoteFile = Join-Path $env:TEMP 'day26-quote-body.json'
+        (@{ text = "Day 26 telemetry probe $(Get-Date -Format o)"; author = 'day26-probe' } |
+            ConvertTo-Json -Compress) | Out-File $quoteFile -Encoding ascii -NoNewline
+
+        $quoteCode = curl.exe -s -o "$env:TEMP\day26-quote.json" -w '%{http_code}' --max-time 60 `
+                        -X POST "$ApiBaseUrl/api/quotes" `
+                        -H "Content-Type: application/json" `
+                        -H "Authorization: Bearer $token" --data-binary "@$quoteFile" 2>$null
+
+        if ($quoteCode -eq '200' -or $quoteCode -eq '201') {
+            Ok "Quote created (HTTP $quoteCode) -- the request that should span API, Service Bus and worker."
+        } else {
+            Note "Quote creation returned HTTP $quoteCode -- the write did NOT happen."
+            $qBody = ''
+            if (Test-Path "$env:TEMP\day26-quote.json") { $qBody = (Get-Content "$env:TEMP\day26-quote.json" -Raw) }
+            if (-not [string]::IsNullOrWhiteSpace($qBody)) { Note "  body: $($qBody.Trim())" }
+            Note 'The trace stitch verdict below cannot be trusted without it.'
+        }
+
+        # NOW the reads, with the token, so the latency table describes the
+        # endpoint rather than the 401 path.
+        $readCodes = @()
+        1..10 | ForEach-Object {
+            $readCodes += (curl.exe -s -o NUL -w '%{http_code}' --max-time 60 `
+                              -H "Authorization: Bearer $token" "$ApiBaseUrl/api/quotes" 2>$null)
+        }
+        $ok = @($readCodes | Where-Object { $_ -eq '200' }).Count
+        Ok "Authenticated reads: $ok of 10 returned 200 (codes: $((($readCodes | Sort-Object -Unique) -join ', ')))"
     }
 
     Write-Host ''
