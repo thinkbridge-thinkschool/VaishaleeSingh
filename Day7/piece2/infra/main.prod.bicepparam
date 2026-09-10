@@ -332,6 +332,28 @@ param sqlPublicNetworkAccess = 'Enabled'
 // else.
 param sqlZoneRedundant = false
 
+// The machine that administers the server. create-sql-user.ps1 connects as a
+// PERSON, not as the app -- an Entra-only server grants the managed identity
+// access to the SERVER, while the contained user inside the DATABASE is T-SQL
+// that ARM cannot write. Without a rule for the operator's address that script
+// cannot connect at all:
+//
+//   Cannot open server 'sql-quotes-...' requested by the login. Client with
+//   IP address '...' is not allowed to access the server.
+//
+// Read from the environment and NEVER written here: an IP address is personal
+// data, this file is committed, and the address changes between sessions
+// anyway. 05-promote-prod.ps1 sets it before the create.
+//
+//   $env:SQL_CLIENT_IP = (Invoke-RestMethod https://api.ipify.org)
+//
+// Unset means no client rule at all, which is the correct default for prod --
+// an administrator's workstation should be allowed in while it is
+// administering and not one minute longer.
+param sqlAllowedClientIpAddresses = empty(readEnvironmentVariable('SQL_CLIENT_IP', ''))
+  ? []
+  : [readEnvironmentVariable('SQL_CLIENT_IP', '')]
+
 // A GROUP, not a person, unlike dev. A production database whose only
 // administrator is one named individual loses its administrator when that
 // person changes role.

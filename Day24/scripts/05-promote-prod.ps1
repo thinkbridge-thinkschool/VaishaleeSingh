@@ -424,6 +424,31 @@ try {
         return [pscustomobject]@{ Text = (($out | Out-String).Trim()); ExitCode = $code }
     }
 
+    # THE OPERATOR'S ADDRESS, THROUGH THE ENVIRONMENT AND NOT THE REPOSITORY.
+    #
+    # An Entra-only server grants the managed identity access to the SERVER;
+    # the contained user inside the DATABASE is T-SQL that ARM cannot write, so
+    # step 8 connects as a person. Without a firewall rule for this machine it
+    # cannot connect at all, and the failure arrives at step 8 -- after the
+    # stack, the vault and the images are already done:
+    #
+    #   Cannot open server '...' requested by the login. Client with IP
+    #   address '...' is not allowed to access the server.
+    #
+    # main.prod.bicepparam reads SQL_CLIENT_IP and turns it into exactly one
+    # firewall rule. It is set here rather than committed because an IP address
+    # is personal data and this repository is public to its readers; it also
+    # changes between sessions, so a committed value would be wrong as well as
+    # inappropriate.
+    try {
+        $env:SQL_CLIENT_IP = (Invoke-RestMethod https://api.ipify.org -TimeoutSec 20).ToString().Trim()
+        Ok 'This machine will be allowed through the SQL firewall for the duration of the deployment.'
+    } catch {
+        Note 'Could not determine this machine''s public address, so no SQL firewall rule will be added.'
+        Note 'Step 8 will fail to connect. Set it by hand and re-run:'
+        Note '  $env:SQL_CLIENT_IP = (Invoke-RestMethod https://api.ipify.org)'
+    }
+
     # WAIT FOR A TERMINAL STATE FIRST.
     #
     # A deployment stack cannot be updated while it is mid-operation, and a
