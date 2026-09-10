@@ -98,14 +98,35 @@ function Invoke-AzJson {
 # The (?<!:) guard keeps the // in https:// intact -- several comments cite
 # documentation URLs, and eating half a URL would corrupt the very lines this
 # is trying to preserve.
+#
+# AND THE RESULT IS JOINED WITH SPACES, NOT NEWLINES, WHICH IS THE OTHER HALF
+# OF THE BUG AND THE HALF THAT WAS ACTUALLY FATAL.
+#
+# Stripping the comments alone was not enough. The saved evidence from that
+# attempt contained RAW, UNAGGREGATED AppRequests rows -- every column of
+# every record -- which means the query az executed was the single word
+# `AppRequests`. Only the FIRST LINE survived: the newlines do not make it
+# through to az.exe as part of one argument, so every stage after the table
+# name was silently discarded.
+#
+# That is why this failure was so persuasive. A truncated query is still
+# VALID, so there is no error; it just answers a different and much broader
+# question than the one asked. Combined with the comments, the same mechanism
+# produced two different wrong answers -- "no rows" when the comment swallowed
+# everything, and "all rows" when it did not -- and neither looked like a
+# transport problem.
+#
+# KQL is whitespace-insensitive between operators, so a single line built with
+# spaces is exactly equivalent to the multi-line original, and it cannot be
+# truncated by a newline that never survives.
 function Get-KqlQuery {
     param([Parameter(Mandatory)] [string] $Path)
 
     $clean = foreach ($line in (Get-Content $Path)) {
         $stripped = [regex]::Replace($line, '(?<!:)//.*$', '')
-        if ($stripped.Trim() -ne '') { $stripped.TrimEnd() }
+        if ($stripped.Trim() -ne '') { $stripped.Trim() }
     }
-    return ($clean -join "`n")
+    return ($clean -join ' ')
 }
 
 Write-Host ''
@@ -374,8 +395,13 @@ union
 | order by dependencies desc
 '@
 
+# Flattened for the same reason as the file-based queries above: a here-string
+# is multi-line, and multi-line does not survive the trip.
+$stitchOneLine = (($stitchQuery -split "`r?`n" | ForEach-Object { $_.Trim() } |
+                   Where-Object { $_ -ne '' }) -join ' ')
+
 $stitch = Invoke-AzText @('monitor', 'log-analytics', 'query', '-w', $wsid,
-                          '--analytics-query', $stitchQuery, '-o', 'table')
+                          '--analytics-query', $stitchOneLine, '-o', 'table')
 
 $verdictPath = Join-Path $outDir 'trace-stitch-verdict.txt'
 if ([string]::IsNullOrWhiteSpace($stitch)) {
