@@ -69,17 +69,43 @@ internal static class ResilienceTestHost
         "https://login.microsoftonline.test/common/v2.0/.well-known/openid-configuration";
 
     /// <summary>
-    /// A fast-breaking, fast-recovering policy. Every number here is small for
-    /// one reason: the wall clock is the only thing that made Day 5 skip this
-    /// test, and the policy's behaviour does not depend on the magnitudes.
+    /// A fast-BREAKING policy. Every number here is small for one reason: the
+    /// wall clock is the only thing that made Day 5 skip these tests, and the
+    /// policy's behaviour does not depend on the magnitudes.
     ///
     /// The values respect Polly's own lower bounds (500ms on SamplingDuration
-    /// and BreakDuration), which is why they are 2s and 1s rather than
+    /// and BreakDuration), which is why SamplingDuration is 2s rather than
     /// microseconds.
+    ///
+    /// BUT BreakDuration DEFAULTS TO THIRTY SECONDS, NOT ONE, AND THAT IS THE
+    /// FIX FOR A REAL FLAKE. It was one second, and
+    /// Circuit_UnderSustainedFailure_Opens failed in CI with
+    ///
+    ///     Expected metrics.CircuitOpened to be 1L, but found 2L.
+    ///
+    /// after passing locally every time. That test drives six sequential
+    /// failing calls and expects the last two to bounce off an open circuit.
+    /// On a loaded runner those six calls take longer than a second, so the
+    /// break EXPIRES mid-test: the circuit goes half-open, the next failure
+    /// re-opens it, and the counter reads 2. The breaker was behaving
+    /// perfectly. The test was racing the clock it had set itself.
+    ///
+    /// The tempting fix is to relax the assertion to "at least once". That
+    /// would be worse than the flake: opening exactly once is the property
+    /// under test, and a breaker that opens repeatedly under one sustained
+    /// outage is a genuine defect this suite would then no longer catch. So
+    /// the timing dependency is removed instead — thirty seconds cannot
+    /// elapse inside a test that runs in two.
+    ///
+    /// The three tests that actually exercise recovery already pass
+    /// breakDuration: "00:00:01" explicitly, because a short break is the
+    /// point for them. They are unaffected, and the explicit argument now
+    /// reads as the deliberate choice it always was rather than as a
+    /// restatement of the default.
     /// </summary>
     internal static Dictionary<string, string?> FastBreaker(
         int minimumThroughput = 4,
-        string breakDuration = "00:00:01") => new()
+        string breakDuration = "00:00:30") => new()
     {
         ["Resilience:TotalTimeout"] = "00:00:05",
         ["Resilience:AttemptTimeout"] = "00:00:01",
