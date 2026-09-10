@@ -648,6 +648,36 @@ if ([string]::IsNullOrWhiteSpace($sqlFqdn) -or [string]::IsNullOrWhiteSpace($ide
 }
 
 # ===========================================================================
+Step '8b. Apply the database migrations'
+# ===========================================================================
+# THE STEP THAT WAS MISSING, AND THE APP SAID SO BETTER THAN ANY LOG COULD.
+#
+# Prod came up in CrashLoopBackOff, nine restarts, and the reason was its own
+# startup check:
+#
+#   System.InvalidOperationException: The SQL Server database has no applied
+#   migrations. They are applied by the deployment, not by this app.
+#
+# That design is right -- an app that migrates its own schema on startup will,
+# on the day two replicas start together, race itself -- and prod has
+# apiMinReplicas = 2, so it would have raced on its very first deployment.
+# But "applied by the deployment" means some deployment step has to do it, and
+# this promotion had no such step. Dev's schema was applied by hand on Day 24
+# and the promotion inherited the gap rather than the habit.
+#
+# It goes AFTER the contained user exists (the migration connects as the
+# operator, but the app must be able to read what it creates) and BEFORE the
+# apps are rolled, so the first revision that starts finds a schema.
+if ([string]::IsNullOrWhiteSpace($sqlFqdn)) {
+    Note 'No SQL FQDN; run Day24/scripts/03-apply-sql-migrations.ps1 by hand before the apps will start.'
+} else {
+    & (Join-Path $PSScriptRoot '03-apply-sql-migrations.ps1') `
+        -SqlServerFqdn $sqlFqdn -DatabaseName $databaseName
+    if ($LASTEXITCODE -ne 0) { Die 'Applying the migrations failed. The apps will crash on startup until this succeeds.' }
+    Ok 'Schema applied.'
+}
+
+# ===========================================================================
 Step '9. Roll both apps onto the imported images'
 # ===========================================================================
 foreach ($p in $promotions) {
