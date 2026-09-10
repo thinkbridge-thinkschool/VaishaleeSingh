@@ -127,8 +127,40 @@ param location = 'uaenorth'
 // possible. It also means the vault's name is reserved for the full retention
 // window if this stack is ever torn down — which is the correct trade in
 // production and the wrong one in dev.
-param keyVaultPurgeProtection = true
-param keyVaultSoftDeleteRetentionInDays = 90
+// PURGE PROTECTION OFF, AND THIS REVERSES WHAT THIS FILE SAID BEFORE.
+//
+// It was true, with a comment arguing that purge protection is "the correct
+// trade in production and the wrong one in dev". That argument is sound for a
+// production vault that is never meant to be deleted. It is wrong for THIS
+// prod, whose lifecycle explicitly includes teardown -- and it makes the
+// teardown the exercise is about stop being clean:
+//
+//   * a deleted vault becomes SOFT-deleted and cannot be purged for the
+//     retention window, so `az stack sub delete` leaves something behind;
+//   * the vault's name is derived deterministically from the resource token,
+//     so that soft-deleted vault holds the name kv-whppc5qu7yzzg for ninety
+//     days -- and prod cannot be deployed again until it is released.
+//
+// A failed create tears down what it made, so a few failed attempts would
+// have locked this environment's vault name for a quarter of a year. Seven
+// days of soft-delete keeps the recovery window that matters while leaving
+// the name reclaimable. A real production vault should have this true; a
+// vault that is stood up and torn down as an exercise should not.
+param keyVaultPurgeProtection = false
+param keyVaultSoftDeleteRetentionInDays = 7
+
+// WHO MAY SEED THE SIGNING KEY, granted by the template rather than by hand.
+//
+// The vault is created empty so the key never passes through a template or a
+// deployment log. The consequence nobody wrote down until prod met it: the
+// operator needs WRITE access to a brand-new RBAC vault, and has none.
+//
+//   ERROR: (Forbidden) Caller is not authorized to perform action on resource.
+//
+// A hand-run `az role assignment create` fixes that once and then disappears
+// with the vault on the next failed deployment. Granting it here means the
+// vault arrives usable. Scoped to this vault alone, for this one principal.
+param keyVaultSecretsOfficerPrincipalId = 'a59d00a8-a829-49b4-83d1-952727eea166'
 
 // --- Entra ID (Day 25) ----------------------------------------------------
 // THESE THREE ARE MISSING ON PURPOSE, AND THIS FILE DOES NOT COMPILE WITHOUT

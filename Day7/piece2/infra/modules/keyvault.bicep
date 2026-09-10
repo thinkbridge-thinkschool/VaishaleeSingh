@@ -53,6 +53,9 @@ param tags object
 @description('Principal (object) ID of the identity that reads secrets — the app. Empty skips the grant, which leaves a vault the app cannot read.')
 param appPrincipalId string = ''
 
+@description('Object ID of the human operator who must SEED the signing key. Empty grants nobody. Not a secret: a directory object id identifies a principal, it does not authenticate one.')
+param secretsOfficerPrincipalId string = ''
+
 // PURGE PROTECTION IS A PARAMETER, AND IT IS OFF BY DEFAULT, WHICH LOOKS LIKE
 // THE WRONG DEFAULT UNTIL YOU HOLD IT NEXT TO DAY 24.
 //
@@ -144,6 +147,37 @@ resource secretsUserRoleAssignment 'Microsoft.Authorization/roleAssignments@2022
     principalId: appPrincipalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', secretsUserRoleDefinitionId)
+  }
+}
+
+// THE OPERATOR'S WRITE ACCESS, GRANTED BY THE TEMPLATE RATHER THAN BY HAND.
+//
+// This vault is created EMPTY on purpose -- the signing key is written
+// straight from the operator so it never passes through a template, a
+// parameter file or a deployment log. That design has a consequence nobody
+// wrote down until prod met it: the operator needs write access to the vault,
+// and on a brand-new RBAC vault they have none. The seed failed with
+//
+//   ERROR: (Forbidden) Caller is not authorized to perform action on resource.
+//
+// and the fix looked like a one-off `az role assignment create`. It is not a
+// one-off: the vault is destroyed and recreated on every failed deployment, so
+// a hand-granted assignment on the vault disappears with it, and the next
+// attempt fails the same way. Granting it here means the vault arrives usable.
+//
+// Secrets OFFICER, not User, because seeding is a write -- and scoped to this
+// vault alone, for one named principal, so it is narrower than the
+// subscription-level grant that would otherwise be the tempting shortcut.
+resource secretsOfficerRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(secretsOfficerPrincipalId)) {
+  name: guid(keyVault.id, secretsOfficerPrincipalId, 'KeyVaultSecretsOfficer')
+  scope: keyVault
+  properties: {
+    principalId: secretsOfficerPrincipalId
+    // A human, not a service principal. Getting this wrong makes the
+    // assignment fail with a message about the principal not being found,
+    // which reads like a wrong object id.
+    principalType: 'User'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')
   }
 }
 

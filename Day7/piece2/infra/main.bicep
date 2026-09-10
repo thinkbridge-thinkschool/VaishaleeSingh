@@ -90,6 +90,9 @@ param keyVaultPurgeProtection bool = false
 @description('Days a soft-deleted vault stays recoverable. 7 in dev, 90 in prod.')
 param keyVaultSoftDeleteRetentionInDays int = 7
 
+@description('Object ID of the operator who seeds the signing key into the empty vault. Empty grants nobody, which is right for an environment whose vault is already seeded. Not a secret: a directory object id identifies a principal, it does not authenticate one.')
+param keyVaultSecretsOfficerPrincipalId string = ''
+
 @description('Name of the secret holding the JWT signing key, inside the vault.')
 param jwtSecretName string = 'jwt-secret'
 
@@ -401,6 +404,7 @@ module keyVault 'modules/keyvault.bicep' = {
     appPrincipalId: identity.outputs.identityPrincipalId
     enablePurgeProtection: keyVaultPurgeProtection
     softDeleteRetentionInDays: keyVaultSoftDeleteRetentionInDays
+    secretsOfficerPrincipalId: keyVaultSecretsOfficerPrincipalId
   }
 }
 
