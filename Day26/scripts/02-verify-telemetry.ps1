@@ -48,6 +48,23 @@ param(
     [string] $WorkspaceName  = 'log7mo4cimyk4vnk',
     [string] $ApiBaseUrl     = 'https://quotes-api-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io',
     [int]    $WaitSeconds    = 300,
+
+    # HOW MANY WRITES, AND WHY IT IS NOT ONE.
+    #
+    # Ingestion sampling is live at roughly 12.5%, and Azure Monitor samples
+    # CONSISTENTLY per operation id: a trace is kept or dropped whole. So a
+    # probe that makes a single write is asking a 1-in-8 coin flip to decide
+    # whether the trace-stitch verdict is CONFIRMED or NOT CONFIRMED. The
+    # first run of this script did exactly that, reported NOT CONFIRMED, and
+    # offered "traceparent is not travelling" as an explanation for what was
+    # most likely a sampled-out trace.
+    #
+    # Twenty-five writes leave a ~3.5% chance that no trace survives, which is
+    # the difference between a verdict and a guess. The alternative -- raising
+    # the sampling ratio in dev -- needs a redeploy and re-opens the ingestion
+    # quota that Day 26 already had to fix once.
+    [int]    $WriteCount     = 25,
+
     [switch] $SkipTraffic
 )
 
@@ -285,19 +302,29 @@ if (-not $SkipTraffic) {
         # trace-stitch verdict depends on, so a silently mangled body here
         # would produce a NOT CONFIRMED that blamed traceparent for a
         # PowerShell quoting problem.
-        $quoteFile = Join-Path $env:TEMP 'day26-quote-body.json'
-        (@{ text = "Day 26 telemetry probe $(Get-Date -Format o)"; author = 'day26-probe' } |
-            ConvertTo-Json -Compress) | Out-File $quoteFile -Encoding ascii -NoNewline
+        $quoteFile  = Join-Path $env:TEMP 'day26-quote-body.json'
+        $written    = 0
+        $writeCodes = @()
 
-        $quoteCode = curl.exe -s -o "$env:TEMP\day26-quote.json" -w '%{http_code}' --max-time 60 `
-                        -X POST "$ApiBaseUrl/api/quotes" `
-                        -H "Content-Type: application/json" `
-                        -H "Authorization: Bearer $token" --data-binary "@$quoteFile" 2>$null
+        1..$WriteCount | ForEach-Object {
+            (@{ text = "Day 26 telemetry probe $_ of $WriteCount at $(Get-Date -Format o)"
+                author = 'day26-probe' } |
+                ConvertTo-Json -Compress) | Out-File $quoteFile -Encoding ascii -NoNewline
 
-        if ($quoteCode -eq '200' -or $quoteCode -eq '201') {
-            Ok "Quote created (HTTP $quoteCode) -- the request that should span API, Service Bus and worker."
+            $quoteCode = curl.exe -s -o "$env:TEMP\day26-quote.json" -w '%{http_code}' --max-time 60 `
+                            -X POST "$ApiBaseUrl/api/quotes" `
+                            -H "Content-Type: application/json" `
+                            -H "Authorization: Bearer $token" --data-binary "@$quoteFile" 2>$null
+
+            $writeCodes += $quoteCode
+            if ($quoteCode -eq '200' -or $quoteCode -eq '201') { $written++ }
+        }
+
+        if ($written -gt 0) {
+            Ok "Quotes created: $written of $WriteCount (codes: $((($writeCodes | Sort-Object -Unique) -join ', ')))"
+            Ok 'These are the requests that should span API, Service Bus and worker.'
         } else {
-            Note "Quote creation returned HTTP $quoteCode -- the write did NOT happen."
+            Note "No write succeeded (codes: $((($writeCodes | Sort-Object -Unique) -join ', ')))."
             $qBody = ''
             if (Test-Path "$env:TEMP\day26-quote.json") { $qBody = (Get-Content "$env:TEMP\day26-quote.json" -Raw) }
             if (-not [string]::IsNullOrWhiteSpace($qBody)) { Note "  body: $($qBody.Trim())" }
@@ -308,8 +335,15 @@ if (-not $SkipTraffic) {
         # endpoint rather than the 401 path.
         $readCodes = @()
         1..10 | ForEach-Object {
+            # page AND size are REQUIRED, non-nullable query parameters on this
+            # endpoint (QuoteEndpointExtensions), so omitting them is a 400 from
+            # model binding before any handler code runs. The earlier version of
+            # this probe omitted them and reported "0 of 10 returned 200",
+            # which read as a broken API and was this script's own bug -- and it
+            # put a 95% failure rate for GET /api/quotes into the latency
+            # evidence, entirely manufactured by the probe.
             $readCodes += (curl.exe -s -o NUL -w '%{http_code}' --max-time 60 `
-                              -H "Authorization: Bearer $token" "$ApiBaseUrl/api/quotes" 2>$null)
+                              -H "Authorization: Bearer $token" "$ApiBaseUrl/api/quotes?page=1&size=10" 2>$null)
         }
         $ok = @($readCodes | Where-Object { $_ -eq '200' }).Count
         Ok "Authenticated reads: $ok of 10 returned 200 (codes: $((($readCodes | Sort-Object -Unique) -join ', ')))"
@@ -431,15 +465,50 @@ union
 | order by dependencies desc
 '@
 
-# Flattened for the same reason as the file-based queries above: a here-string
-# is multi-line, and multi-line does not survive the trip.
-$stitchOneLine = (($stitchQuery -split "`r?`n" | ForEach-Object { $_.Trim() } |
-                   Where-Object { $_ -ne '' }) -join ' ')
+# HANDED TO az AS A FILE, AND ITS FAILURE TOLD APART FROM ITS EMPTINESS.
+#
+# This call used to go through Invoke-AzText with the query flattened onto one
+# line. Invoke-AzText returns $null on any non-zero exit, and the check below
+# treats blank as "no rows" -- so a query that FAILED and a query that found
+# NOTHING produced the same verdict, and the verdict it produced was
+# NOT CONFIRMED with an explanation blaming traceparent.
+#
+# That is the same mistake, in the same script, that already cost most of a day
+# on the four file-based queries. It was fixed there and left here, because the
+# verdict query is the one place the answer was assumed rather than read. A
+# helper that cannot distinguish failure from emptiness has no business
+# deciding whether the system works.
+$stitchFile = Join-Path $env:TEMP 'day26-stitch.kql'
+$stitchQuery | Out-File $stitchFile -Encoding ascii
 
-$stitch = Invoke-AzText @('monitor', 'log-analytics', 'query', '-w', $wsid,
-                          '--analytics-query', $stitchOneLine, '-o', 'table')
+$previous = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    $stitch     = (& az monitor log-analytics query -w $wsid `
+                        --analytics-query "@$stitchFile" -o table 2>&1) -join "`n"
+    $stitchExit = $LASTEXITCODE
+} finally { $ErrorActionPreference = $previous }
 
 $verdictPath = Join-Path $outDir 'trace-stitch-verdict.txt'
+
+if ($stitchExit -ne 0) {
+    # INCONCLUSIVE is a third outcome, and it has to exist. Reporting a broken
+    # query as "the trace does not stitch" is worse than reporting nothing.
+    Note 'INCONCLUSIVE: the verdict query itself failed. az said:'
+    foreach ($line in ($stitch -split "`n" | Where-Object { $_ -ne '' })) { Note "  $line" }
+    @"
+Day 26 -- distributed trace verdict: INCONCLUSIVE
+Run at: $(Get-Date -Format o)
+
+The query that decides this verdict did not run. This says nothing about
+whether the trace stitches. az reported:
+
+$stitch
+"@ | Out-File $verdictPath -Encoding utf8
+    Ok "Evidence written to Day26/verification/"
+    return
+}
+
 if ([string]::IsNullOrWhiteSpace($stitch)) {
     Note 'NOT CONFIRMED: no operation carries two requests.'
     Note 'That means either no write reached Service Bus in the last hour, or'

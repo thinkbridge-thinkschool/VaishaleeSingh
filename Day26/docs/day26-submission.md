@@ -207,56 +207,135 @@ a real address — an alert nobody receives is not an alert.
 
 ## Distributed tracing: API → worker → DB
 
-**Partially confirmed, and the partial is the finding.**
+**Confirmed.** It was not confirmed when this document was first written, and
+the reason it now is deserves more space than the confirmation.
 
-One operation, `e08131d63e18b5798ae6ebee6039184c`, from a real `POST /api/quotes/`:
+One operation, `01a633e98d9638bac379240f183025ef`, from a real
+`POST /api/quotes/` (trimmed to the shape; the full run is in
+`Day26/verification/trace-stitch.txt`):
 
 ```
-Detail                   Kind        DurationMs  SpanId            ParentSpanId
-POST /api/quotes/        request       242.2      a592669f70d5be36  (root)
-SQL :: SQL: quotes       dependency      1.5      3733c7562b7653fe  a592669f70d5be36
-SQL :: SQL: quotes       dependency      3.1      1a7fabc8f0fa010f  a592669f70d5be36
-SQL :: SQL: quotes       dependency      2.7      a9a7e42d2fe10c7e  1a7fabc8f0fa010f
-Other :: Outbox publish  dependency    461.2      8c49c5f554b171da  a592669f70d5be36
-SQL :: SQL: quotes       dependency      7.7      0c3e5e1c175dc4a6  8c49c5f554b171da
-…
+Detail                              Kind        DurationMs  SpanId            ParentSpanId
+POST /api/quotes/                   request        10.5      76002b3620d37bb8  (root)
+  SQL :: SQL: quotes                dependency      0.9      7e678a9adfea76fe  76002b3620d37bb8
+  SQL :: SQL: quotes                dependency      1.1      0b1b4b8575cea166  76002b3620d37bb8
+  Other :: Outbox publish           dependency     12.7      293b10fe7096e3e9  76002b3620d37bb8
+    SQL :: SQL: quotes              dependency      3.7      349ed3a8b5417167  293b10fe7096e3e9
+    QuoteEventProcessor.ProcessMes… request       114.0      0cd3b941a6edcc9a  293b10fe7096e3e9
+      SQL :: SQL: quotes            dependency      1.0      56d4f55cb0eb33dc  0cd3b941a6edcc9a
+    QuoteEventProcessor.ProcessMes… request       116.0      821d629fb050d0e5  293b10fe7096e3e9
+      SQL :: SQL: quotes            dependency      0.9      ae0ef7bd5f4f0043  821d629fb050d0e5
 ```
 
-**API → DB stitches, and so does API → outbox → DB.** The SQL spans are
-children of the request, the publish is a child of the request, and further SQL
-is nested under the publish span — one operation id across all of it, with the
-parent/child chain intact.
+![End-to-end transaction: POST /api/quotes to Outbox publish to QuoteEventProcessor.ProcessMessage to SQL, under one operation id](trace-api-worker.png)
 
-**API → worker does not stitch.** The whole trace contains exactly **one**
-request span and three span kinds: the HTTP request, SQL, and `Outbox publish`.
-A correctly stitched write would show a *second* `AppRequest` — Azure Monitor
-maps a Consumer span to a request, because receiving a message is the worker's
-own incoming operation. There is no such span.
+The portal's own view of the same operation. Two things in it are worth
+pointing at, because both look like faults and neither is one. The worker row
+carries **Response code 0** — a Consumer span has no HTTP status, and
+`Successful request: true` sits beside it. And the custom properties read
+`messaging.operation: process` / `messaging.source.name: QuoteCreated`, which
+are the tags added by the fix; their presence is how you tell the running image
+contains it.
 
-Two concrete causes, both evidenced rather than guessed:
+Three `AppRequests` rows under one operation id: the HTTP call and two worker
+receives. Azure Monitor records a Consumer span as a *request*, because
+receiving a message is the worker's own incoming operation — so a second
+request row appearing at all is the stitch. Twenty-six operations in the run
+have this shape, and **every `ParentSpanId` in the trace resolves to a `SpanId`
+in the same trace**, which is the property that was broken before.
 
-**The Azure SDK's Service Bus spans are never collected.**
-`ObservabilityExtensions` calls `AddSource("Azure.Messaging.ServiceBus")` and
-no such dependency exists in 24 hours of data — the publish is visible only
-through the app's own `Outbox publish` span from `QuotesActivitySource`. The
-SDK names its sources per client type (`Azure.Messaging.ServiceBus.ServiceBusSender`
-and friends) and `AddSource` matches exactly rather than by prefix, so a
-wildcard is required. The hop is traced by our span, not the SDK's, which is
-thinner coverage than the code claims.
+### Why the worker was invisible, which was not what this document first claimed
 
-**And some spans are created but never exported.** Two `ParentSpanId` values in
-this trace — `c49b8dec3736b542` and `5d50c538a10d4608` — **do not appear as any
-`SpanId`**. Orphaned parents are proof that spans exist which are not reaching
-App Insights: SQL calls whose parent activity was dropped. That is what an
-unregistered `ActivitySource` looks like from the query side, and it is the
-strongest single piece of evidence here.
+The first version of this section blamed `AddSource("Azure.Messaging.ServiceBus")`
+matching exactly rather than by prefix, and it produced the right evidence for
+the wrong conclusion. The orphaned `ParentSpanId`s it found were the real clue
+and they pointed somewhere else:
 
-So the mechanism the code implements is sound — `ServiceBusQuoteEventPublisher`
-writes `traceparent` into `ApplicationProperties`, `QuoteEventProcessorService`
-reads it and calls `SetParentId` — and the *collection* is incomplete. Claiming
-the trace stitches API → worker → DB would be untrue, and claiming it is broken
-would also be untrue. It is API → DB confirmed, worker unconfirmed, with the
-next step identified.
+```csharp
+var activity = new Activity("QuoteEventProcessor.ProcessMessage");
+activity.SetParentId(traceparent);
+activity.Start();
+```
+
+That Activity is valid. It starts, it becomes `Activity.Current`, its children
+inherit its ids — and OpenTelemetry never sees it, because the exporter is
+driven by an `ActivityListener` that samples activities **by source**, and an
+Activity constructed with `new` belongs to no source. Nothing logs an error.
+
+So the symptom was not a missing span, which would have been obvious. It was a
+*broken trace*: the EF Core spans inside the handler DO come from a registered
+source, so they were exported carrying a `ParentSpanId` pointing at a span
+nothing ever sent. Two of those orphans were sitting in the evidence with the
+answer in them.
+
+The fix is four lines:
+
+```csharp
+if (!ActivityContext.TryParse(traceparent, null, out var parentContext))
+    return null;
+
+var activity = QuotesActivitySource.Instance.StartActivity(
+    "QuoteEventProcessor.ProcessMessage",
+    ActivityKind.Consumer,
+    parentContext);
+```
+
+`ActivityKind.Consumer` is what makes Azure Monitor render this as the worker's
+incoming operation rather than an internal step. `TryParse` replaces
+`SetParentId`, which accepts any string and fails silently on a malformed one.
+
+The Azure SDK's own processor spans are still deliberately **not** registered.
+Collecting them needs a wildcard, and the wildcard also brings a second
+consumer span per message — the same double instrumentation that already
+inflates the SQL counts below. One consumer span this code owns beats two it
+does not.
+
+### Two worker requests per message is correct
+
+Each write produces **two** `ProcessMessage` requests, and the run shows 52
+against 27 publishes. That is the topic's two subscriptions each delivering a
+copy — the fan-out this design chose in Day 19, not duplicate processing.
+Idempotency is enforced per subscription by `IProcessedMessageStore`. Stating
+it here because a reader who counts rows will otherwise read it as a bug.
+
+### The worker now appears in the latency table
+
+`QuoteEventProcessor.ProcessMessage` shows up in `01-latency-by-endpoint.kql`
+beside the HTTP endpoints, at p50 91 ms / p99 157 ms. That is a consequence of
+Consumer spans becoming requests, and it is useful — the worker's latency is
+worth watching — but "by endpoint" is now a slight lie in that query's name.
+Left as is rather than filtered out: hiding the worker to keep a column heading
+accurate is the wrong trade.
+
+### What made this take three runs
+
+**The verdict was decided by a query that had failed.** The script flattened
+its verdict query onto one line and passed it as an argument. PowerShell
+strips double quotes on the way to a native command, so `has "Outbox publish"`
+arrived as `has Outbox publish`, az exited non-zero, the helper returned
+`$null`, and the caller treated blank as *no rows*. It then printed
+NOT CONFIRMED and offered "traceparent is not surviving the hop" as the
+explanation — a confident diagnosis produced by a query that never ran.
+
+This is the fourth appearance of the same PowerShell quoting bug in one day
+(three curl bodies, then this), and the second appearance of the same
+failure-versus-emptiness bug in the same script — fixed for the four
+file-based queries and left in place for the one query that decides the
+verdict. Both are now closed: the query goes to az as `@file`, the exit code
+is read, and **INCONCLUSIVE** exists as a third outcome. Reporting a broken
+query as "the trace does not stitch" is worse than reporting nothing.
+
+**A single write cannot verify a trace under sampling.** Sampling is live at
+~12.5% and Azure Monitor samples consistently per operation, keeping or
+dropping a trace whole. The probe made one write, so the verdict was a 1-in-8
+coin flip. It now makes 25, leaving ~3.5% chance that no trace survives.
+
+**The 95% failure rate on `GET /api/quotes/` was the probe's own doing.**
+`page` and `size` are required non-nullable query parameters, so omitting them
+is a 400 from model binding before any handler runs. The probe omitted them,
+reported "0 of 10 returned 200", and wrote a manufactured 95% failure rate into
+the latency evidence. With `?page=1&size=10` it is 10 of 10. Nothing was wrong
+with the endpoint.
 
 ## What cost the most time, and why it is worth recording
 

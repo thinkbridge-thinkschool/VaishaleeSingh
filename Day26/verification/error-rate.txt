@@ -1,5 +1,7 @@
 ﻿Day 26 -- Error rate (the alert query)
 Query:  Day26/kql/03-error-rate.kql   (executed verbatim from the file; also deployed as a workspace saved search)
-Run at: 2026-09-10T12:36:04.2821469+05:30
-(no rows)
+Run at: 2026-09-10T13:51:42.1748639+05:30
+TableName      TimeGenerated         ErrorRatePct    Failed    Total
+-------------  --------------------  --------------  --------  -------
+PrimaryResult  2026-09-10T08:15:00Z  1.15            1         87
 
