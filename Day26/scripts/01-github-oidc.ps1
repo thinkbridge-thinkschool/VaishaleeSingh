@@ -54,6 +54,13 @@ param(
     [string] $ExpectedTenant  = '8d46a076-d093-416d-a57b-8692cde13bf8',
     [string] $ResourceGroup   = 'thinkschool-dev-rg',
     [string] $Repo            = 'thinkbridge-thinkschool/VaishaleeSingh',
+
+    # THE SUBJECT THIS ORGANISATION ACTUALLY SENDS, which is not the one in
+    # Microsoft's or GitHub's documentation. See the block at the credential
+    # list below. Read it off a failing run's log rather than assuming: the
+    # AADSTS700213 error quotes the presented subject verbatim, which is the
+    # only reliable source for it.
+    [string] $RepoWithIds     = 'thinkbridge-thinkschool@285446293/VaishaleeSingh@1331675643',
     [string] $DisplayName     = 'github-actions-quotes (dev)',
     [string] $Registry        = 'cr7mo4cimyk4vnk',
     [string[]] $ContainerApps = @('quotes-api-dev', 'quotes-web-dev')
@@ -180,10 +187,45 @@ if ($null -eq $sp) {
 # ---------------------------------------------------------------------------
 # The workflows run on pushes to main and on pull requests. Those send
 # DIFFERENT subject claims, so one credential does not cover both.
-$creds = @(
-    @{ name = 'main';         subject = "repo:${Repo}:ref:refs/heads/main" }
-    @{ name = 'pull-request'; subject = "repo:${Repo}:pull_request" }
-)
+# IMMUTABLE SUBJECT CLAIMS, AND WHY FOUR CREDENTIALS RATHER THAN TWO.
+#
+# The documented subject is repo:<owner>/<repo>:ref:refs/heads/main. This
+# organisation does not send that. It sends:
+#
+#   repo:thinkbridge-thinkschool@285446293/VaishaleeSingh@1331675643:ref:refs/heads/main
+#
+# GitHub's immutable subject claims embed the organisation's and repository's
+# DATABASE IDs alongside their names, so that deleting a repository and
+# recreating one with the same name cannot inherit the trust the old one had.
+# That is a real improvement -- names are reusable and ids are not -- and it
+# silently invalidates every federated credential written the documented way.
+#
+# The failure is AADSTS700213, "No matching federated identity record found
+# for presented assertion subject", and it quotes the subject it received.
+# That quote is the only trustworthy source for what to register: the format
+# depends on an organisation setting, not on anything visible from the
+# repository.
+#
+# Both forms are registered because the setting can be changed by an
+# administrator at any time, in either direction, and a spare federated
+# credential costs nothing while a missing one costs a red pipeline and an
+# error that names a directory record rather than a policy.
+$subjects = @($Repo)
+if (-not [string]::IsNullOrWhiteSpace($RepoWithIds) -and $RepoWithIds -ne $Repo) {
+    $subjects += $RepoWithIds
+}
+
+$creds = @()
+$index = 0
+foreach ($subjectRepo in $subjects) {
+    # Credential NAMES must be unique within the application and are limited
+    # to 120 characters, so they are numbered rather than derived from the
+    # subject -- which contains characters the name field will not take.
+    $suffix = if ($index -eq 0) { '' } else { "-$index" }
+    $creds += @{ name = "main$suffix";         subject = "repo:${subjectRepo}:ref:refs/heads/main" }
+    $creds += @{ name = "pull-request$suffix"; subject = "repo:${subjectRepo}:pull_request" }
+    $index++
+}
 
 $existingCreds = Invoke-AzJson @('ad', 'app', 'federated-credential', 'list', '--id', $appId, '-o', 'json')
 $existingSubjects = @()

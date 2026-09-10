@@ -149,6 +149,34 @@ jobs:
       # is where the .NET SDK's container tooling looks for registry
       # credentials. No admin username or password is involved -- the ACR admin
       # account is exactly the stored secret this deployment removed.
+      # THE SECOND HALF OF THE VARIABLE CHECK, AND IT EXISTS FOR THE SAME REASON.
+      #
+      # azure/login succeeds with ANY valid credential, including one pointing
+      # at a subscription that has nothing to do with this deployment. When the
+      # secrets still held a previous subscription's values, sign-in went green
+      # and `az acr login` then reported:
+      #
+      #   The resource with name 'cr...' could not be found in subscription
+      #   'Azure subscription 1'
+      #
+      # ARM answers 404 rather than 403 for anything the caller cannot read, so
+      # "wrong subscription" and "missing role" produce the same words. The
+      # subscription NAME in that message was the only clue, and only because
+      # it did not match the one this project uses.
+      #
+      # Asserting the registry is visible catches both causes at the step that
+      # can name them, and prints what it actually signed in to.
+      - name: Confirm the subscription holds the registry
+        run: |
+          echo "Signed in to: $(az account show --query 'join(" / ", [name, id])' -o tsv)"
+          if ! az acr show --name "${REGISTRY%%.*}" -o none 2>/dev/null; then
+            echo "::error::Registry ${REGISTRY%%.*} is not visible from this login."
+            echo "::error::Signed in to $(az account show --query name -o tsv) ($(az account show --query id -o tsv))."
+            echo "::error::Either AZURE_SUBSCRIPTION_ID / AZURE_TENANT_ID / AZURE_CLIENT_ID point at the wrong subscription, or the principal has no read access to the registry. Both look identical from here because ARM returns 404 for what you cannot read."
+            exit 1
+          fi
+          echo "Registry is visible."
+
       - name: Sign in to the registry
         run: az acr login --name "${REGISTRY%%.*}"
 
