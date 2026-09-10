@@ -80,6 +80,34 @@ function Invoke-AzJson {
     try { return $text | ConvertFrom-Json } catch { return $null }
 }
 
+
+# THE COMMENTS THAT MAKE THESE QUERIES TRUSTWORTHY ARE WHAT STOPPED THEM RUNNING.
+#
+# Each .kql file opens with dozens of // lines explaining why it excludes health
+# probes, why it sums ItemCount, why the error-rate floor exists. Passed to
+# az.exe as one argument, the newlines do not reliably survive -- and a KQL
+# query collapsed onto a single line is entirely commented out from its first
+# // onwards. The result is ZERO ROWS AND NO ERROR, which is indistinguishable
+# from "the pipeline is broken" and is what sent me looking at instrumentation,
+# quotas and sampling while 592 AppRequests sat in the workspace.
+#
+# The comments stay in the files and in the deployed saved searches, where the
+# portal renders multi-line KQL properly and where a human actually reads them.
+# They are stripped only for command-line execution.
+#
+# The (?<!:) guard keeps the // in https:// intact -- several comments cite
+# documentation URLs, and eating half a URL would corrupt the very lines this
+# is trying to preserve.
+function Get-KqlQuery {
+    param([Parameter(Mandatory)] [string] $Path)
+
+    $clean = foreach ($line in (Get-Content $Path)) {
+        $stripped = [regex]::Replace($line, '(?<!:)//.*$', '')
+        if ($stripped.Trim() -ne '') { $stripped.TrimEnd() }
+    }
+    return ($clean -join "`n")
+}
+
 Write-Host ''
 Write-Host 'Day 26 -- telemetry verification' -ForegroundColor Cyan
 Write-Host ''
@@ -290,8 +318,8 @@ foreach ($q in $queries) {
     $path = Join-Path $kqlDir $q.file
     if (-not (Test-Path $path)) { Note "Missing $($q.file)"; continue }
 
-    $text = Get-Content $path -Raw
-    if ([string]::IsNullOrWhiteSpace($text)) { Note "$($q.file) is empty"; continue }
+    $text = Get-KqlQuery -Path $path
+    if ([string]::IsNullOrWhiteSpace($text)) { Note "$($q.file) is empty after stripping comments"; continue }
 
     $result = Invoke-AzText @('monitor', 'log-analytics', 'query', '-w', $wsid,
                               '--analytics-query', $text, '-o', 'table')
