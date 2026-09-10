@@ -4,8 +4,8 @@
 write KQL for p50/p99 by endpoint, the dependency call breakdown, and an alert
 on error rate. Confirm distributed tracing stitches API → worker → DB.
 
-**Exercise.** Paste the KQL + a screenshot of the alert. One line on what you'd
-alert on and why.
+**Exercise.** Paste your KQL queries + a screenshot of a distributed trace
+spanning the API and the worker.
 
 Dev: subscription `85567e22-…`, resource group `thinkschool-dev-rg`, region
 `uaenorth`. Workspace `log7mo4cimyk4vnk`, component

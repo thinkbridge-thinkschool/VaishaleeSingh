@@ -2,6 +2,7 @@ using Azure.Messaging.ServiceBus;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using QuotesApi.Data;
+using QuotesApi.Observability;
 using System.Diagnostics;
 using System.Text.Json;
 
@@ -234,19 +235,64 @@ public sealed class QuoteEventProcessorService(
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Rebuilds the publishing request's trace context on the consumer side and
+    /// opens the worker's own span inside it.
+    ///
+    /// WHY THIS GOES THROUGH THE ActivitySource AND NOT `new Activity(...)`.
+    /// The previous version did the latter, and it is the reason no worker span
+    /// ever reached App Insights. `new Activity(name).Start()` produces a
+    /// perfectly valid Activity that OpenTelemetry never sees: the exporter is
+    /// driven by an ActivityListener which samples activities BY SOURCE, and an
+    /// Activity constructed directly belongs to no source. So it starts, it
+    /// becomes Activity.Current, its children inherit its ids -- and it is then
+    /// dropped with no error logged anywhere.
+    ///
+    /// The symptom is not a missing span, which would have been obvious. It is a
+    /// BROKEN trace: the EF Core spans raised inside the handler DO come from a
+    /// registered source, so they are exported carrying a ParentSpanId that
+    /// points at a span nothing ever sent. The result reads as database calls
+    /// with no parent, and an API -> worker -> DB trace that stops at the message.
+    ///
+    /// ActivityKind.Consumer is what makes App Insights render this as the
+    /// receiving end of a message rather than as an internal step, which is the
+    /// difference between a trace that shows the hand-off and one that does not.
+    ///
+    /// The Azure SDK's own processor spans are deliberately still NOT registered
+    /// in ObservabilityExtensions. Their source names are suffixed per client
+    /// type, so collecting them needs a wildcard, and the wildcard also brings a
+    /// second consumer span for every message -- the same double-instrumentation
+    /// that already inflates the SQL dependency counts. One consumer span that
+    /// this code owns is worth more than two it does not.
+    /// </summary>
     private static Activity? RestoreTraceContext(ServiceBusReceivedMessage message, string messageId)
     {
-        if (message.ApplicationProperties.TryGetValue("traceparent", out var traceparentObj)
-            && traceparentObj is string traceparent
-            && !string.IsNullOrWhiteSpace(traceparent))
+        if (!message.ApplicationProperties.TryGetValue("traceparent", out var traceparentObj)
+            || traceparentObj is not string traceparent
+            || string.IsNullOrWhiteSpace(traceparent))
         {
-            var activity = new Activity("QuoteEventProcessor.ProcessMessage");
-            activity.SetParentId(traceparent);
-            activity.Start();
-            activity.SetTag("messaging.message_id", messageId);
-            return activity;
+            return null;
         }
-        return null;
+
+        // Parsed rather than assigned. SetParentId accepts any string and fails
+        // silently on a malformed one; TryParse rejects it here, so a bad header
+        // costs the link and not the span.
+        if (!ActivityContext.TryParse(traceparent, null, out var parentContext))
+        {
+            return null;
+        }
+
+        var activity = QuotesActivitySource.Instance.StartActivity(
+            "QuoteEventProcessor.ProcessMessage",
+            ActivityKind.Consumer,
+            parentContext);
+
+        activity?.SetTag("messaging.system", "servicebus");
+        activity?.SetTag("messaging.operation", "process");
+        activity?.SetTag("messaging.message_id", messageId);
+        activity?.SetTag("messaging.source.name", message.Subject ?? string.Empty);
+
+        return activity;
     }
 
     /// <summary>
