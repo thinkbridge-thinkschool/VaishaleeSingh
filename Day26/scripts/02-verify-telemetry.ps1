@@ -80,6 +80,55 @@ function Invoke-AzJson {
     try { return $text | ConvertFrom-Json } catch { return $null }
 }
 
+
+# THE COMMENTS THAT MAKE THESE QUERIES TRUSTWORTHY ARE WHAT STOPPED THEM RUNNING.
+#
+# Each .kql file opens with dozens of // lines explaining why it excludes health
+# probes, why it sums ItemCount, why the error-rate floor exists. Passed to
+# az.exe as one argument, the newlines do not reliably survive -- and a KQL
+# query collapsed onto a single line is entirely commented out from its first
+# // onwards. The result is ZERO ROWS AND NO ERROR, which is indistinguishable
+# from "the pipeline is broken" and is what sent me looking at instrumentation,
+# quotas and sampling while 592 AppRequests sat in the workspace.
+#
+# The comments stay in the files and in the deployed saved searches, where the
+# portal renders multi-line KQL properly and where a human actually reads them.
+# They are stripped only for command-line execution.
+#
+# The (?<!:) guard keeps the // in https:// intact -- several comments cite
+# documentation URLs, and eating half a URL would corrupt the very lines this
+# is trying to preserve.
+#
+# AND THE RESULT IS JOINED WITH SPACES, NOT NEWLINES, WHICH IS THE OTHER HALF
+# OF THE BUG AND THE HALF THAT WAS ACTUALLY FATAL.
+#
+# Stripping the comments alone was not enough. The saved evidence from that
+# attempt contained RAW, UNAGGREGATED AppRequests rows -- every column of
+# every record -- which means the query az executed was the single word
+# `AppRequests`. Only the FIRST LINE survived: the newlines do not make it
+# through to az.exe as part of one argument, so every stage after the table
+# name was silently discarded.
+#
+# That is why this failure was so persuasive. A truncated query is still
+# VALID, so there is no error; it just answers a different and much broader
+# question than the one asked. Combined with the comments, the same mechanism
+# produced two different wrong answers -- "no rows" when the comment swallowed
+# everything, and "all rows" when it did not -- and neither looked like a
+# transport problem.
+#
+# KQL is whitespace-insensitive between operators, so a single line built with
+# spaces is exactly equivalent to the multi-line original, and it cannot be
+# truncated by a newline that never survives.
+function Get-KqlQuery {
+    param([Parameter(Mandatory)] [string] $Path)
+
+    $clean = foreach ($line in (Get-Content $Path)) {
+        $stripped = [regex]::Replace($line, '(?<!:)//.*$', '')
+        if ($stripped.Trim() -ne '') { $stripped.Trim() }
+    }
+    return ($clean -join ' ')
+}
+
 Write-Host ''
 Write-Host 'Day 26 -- telemetry verification' -ForegroundColor Cyan
 Write-Host ''
@@ -123,22 +172,97 @@ if (-not $SkipTraffic) {
     Write-Host ''
     Write-Host 'Generating traffic' -ForegroundColor Cyan
 
-    # Reads first: they populate the endpoint latency table with something
-    # other than a single write.
-    1..10 | ForEach-Object { curl.exe -s -o NUL "$ApiBaseUrl/api/quotes" 2>$null }
-    1..3  | ForEach-Object { curl.exe -s -o NUL "$ApiBaseUrl/health/ready" 2>$null }
-    Ok 'Reads sent.'
+    # WARM-UP FIRST, AND ITS STATUS IS REPORTED. minReplicas is 0, so the
+    # first request after an idle period cold-starts the container and can
+    # take half a minute. Firing ten requests at a scaled-to-zero app and
+    # discarding the output produces "reads sent" whether or not any of them
+    # arrived -- which is how the last run reported success and then found no
+    # telemetry at all.
+    $warm = curl.exe -s -o NUL -w '%{http_code}' --max-time 120 "$ApiBaseUrl/health/ready" 2>$null
+    if ($warm -ne '200') {
+        Note "Warm-up returned HTTP $warm. The app may be cold or unhealthy;"
+        Note 'everything below will be thin or empty if it never served a request.'
+    } else {
+        Ok 'App is warm (health/ready 200).'
+    }
+
+    # READS COME AFTER AUTHENTICATION, because /api/quotes requires it. The
+    # previous run reported "Reads sent: 0 of 10 returned 200 (codes: 401)" --
+    # ten rejected requests. They are still recorded as requests, so they were
+    # not useless, but a latency table built entirely from 401s describes the
+    # authentication middleware rather than the endpoint. The reads are moved
+    # below the login for that reason.
+
 
     # A deliberately synthetic identity. Deterministic per day so repeated runs
     # reuse one account rather than accumulating a new row every time.
     $probeEmail = "day26-probe-$(Get-Date -Format yyyyMMdd)@example.invalid"
     $probePass  = 'Day26-Probe-' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Date -Format yyyyMMdd))) + '!aA1'
 
-    $regBody = @{ email = $probeEmail; password = $probePass } | ConvertTo-Json -Compress
-    $null = curl.exe -s -o NUL -X POST "$ApiBaseUrl/api/auth/register" -H "Content-Type: application/json" -d $regBody 2>$null
+    # BOTH CALLS REPORT THEIR STATUS AND BODY. The previous version discarded
+    # them and said only "could not obtain a token", which is a symptom and
+    # not a cause: a 400 from validation, a 409 from an existing account, a
+    # 502 from a cold container and a timeout are four different problems with
+    # four different fixes, and they were indistinguishable.
+    # THE JSON GOES THROUGH A FILE, AND THAT IS WHY register RETURNED 400.
+    #
+    # `curl.exe -d '{"email":"..."}'` from PowerShell does not send that JSON.
+    # PowerShell strips the double quotes on the way to a native command, so
+    # curl receives {email:...,password:...}, the API cannot parse it, and the
+    # answer is a 400 with an empty body -- which reads like a validation
+    # failure on values that are in fact fine.
+    #
+    # 01-github-oidc.ps1 already passes Graph bodies through a file for exactly
+    # this reason. I knew the hazard and still wrote it inline here.
+    $regFile = Join-Path $env:TEMP 'day26-register-body.json'
+    (@{ email = $probeEmail; password = $probePass } | ConvertTo-Json -Compress) |
+        Out-File $regFile -Encoding ascii -NoNewline
 
-    $loginBody = @{ email = $probeEmail; password = $probePass } | ConvertTo-Json -Compress
-    $loginRaw = curl.exe -s -X POST "$ApiBaseUrl/api/auth/login" -H "Content-Type: application/json" -d $loginBody 2>$null
+    $regCode = curl.exe -s -o "$env:TEMP\day26-register.json" -w '%{http_code}' --max-time 60 `
+                  -X POST "$ApiBaseUrl/api/auth/register" `
+                  -H "Content-Type: application/json" --data-binary "@$regFile" 2>$null
+    $regBodyText = ''
+    if (Test-Path "$env:TEMP\day26-register.json") { $regBodyText = (Get-Content "$env:TEMP\day26-register.json" -Raw) }
+
+    # 409 is success for this purpose: the account already exists from an
+    # earlier run today, which is exactly what the deterministic name is for.
+    if ($regCode -eq '200' -or $regCode -eq '201') { Ok "register -> HTTP $regCode" }
+    elseif ($regCode -eq '409')                    { Ok  "register -> HTTP 409 (account already exists today, fine)" }
+    else {
+        Note "register -> HTTP $regCode"
+        if (-not [string]::IsNullOrWhiteSpace($regBodyText)) { Note "  body: $($regBodyText.Trim())" }
+    }
+
+    $loginFile = Join-Path $env:TEMP 'day26-login-body.json'
+    (@{ email = $probeEmail; password = $probePass } | ConvertTo-Json -Compress) |
+        Out-File $loginFile -Encoding ascii -NoNewline
+
+    $loginRaw = curl.exe -s -w "`nHTTP:%{http_code}" --max-time 60 `
+                   -X POST "$ApiBaseUrl/api/auth/login" `
+                   -H "Content-Type: application/json" --data-binary "@$loginFile" 2>$null
+
+    # JOINED TO ONE STRING BEFORE -match, and this crashed the last run:
+    #
+    #   The variable '$Matches' cannot be retrieved because it has not been set.
+    #
+    # curl's multi-line output arrives as a string ARRAY, and -match against an
+    # array behaves as a FILTER -- it returns the matching elements and never
+    # populates $Matches. The if() was therefore truthy (a non-empty array)
+    # while $Matches stayed unset, and Set-StrictMode turned reading it into a
+    # terminating error. Against a single string, -match is a boolean and does
+    # populate $Matches.
+    $loginRaw = ($loginRaw -join "`n")
+
+    $loginCode = 'unknown'
+    if ($loginRaw -match 'HTTP:(\d+)\s*$') {
+        $loginCode = $Matches[1]
+        $loginRaw = $loginRaw -replace 'HTTP:\d+\s*$', ''
+    }
+    if ($loginCode -eq '200') { Ok "login -> HTTP 200" }
+    else {
+        Note "login -> HTTP $loginCode"
+        if (-not [string]::IsNullOrWhiteSpace($loginRaw)) { Note "  body: $($loginRaw.Trim())" }
+    }
 
     $token = $null
     if (-not [string]::IsNullOrWhiteSpace($loginRaw)) {
@@ -157,10 +281,38 @@ if (-not $SkipTraffic) {
         Note 'Re-run with credentials that work, or create a quote by hand first.'
     } else {
         Ok 'Authenticated as the probe account.'
-        $quote = @{ text = "Day 26 telemetry probe $(Get-Date -Format o)"; author = 'day26-probe' } | ConvertTo-Json -Compress
-        $null = curl.exe -s -o NUL -X POST "$ApiBaseUrl/api/quotes" `
-                    -H "Content-Type: application/json" -H "Authorization: Bearer $token" -d $quote 2>$null
-        Ok 'Quote created -- this is the request that should span API, Service Bus and worker.'
+        # Through a file, like the other two. This is THE request the whole
+        # trace-stitch verdict depends on, so a silently mangled body here
+        # would produce a NOT CONFIRMED that blamed traceparent for a
+        # PowerShell quoting problem.
+        $quoteFile = Join-Path $env:TEMP 'day26-quote-body.json'
+        (@{ text = "Day 26 telemetry probe $(Get-Date -Format o)"; author = 'day26-probe' } |
+            ConvertTo-Json -Compress) | Out-File $quoteFile -Encoding ascii -NoNewline
+
+        $quoteCode = curl.exe -s -o "$env:TEMP\day26-quote.json" -w '%{http_code}' --max-time 60 `
+                        -X POST "$ApiBaseUrl/api/quotes" `
+                        -H "Content-Type: application/json" `
+                        -H "Authorization: Bearer $token" --data-binary "@$quoteFile" 2>$null
+
+        if ($quoteCode -eq '200' -or $quoteCode -eq '201') {
+            Ok "Quote created (HTTP $quoteCode) -- the request that should span API, Service Bus and worker."
+        } else {
+            Note "Quote creation returned HTTP $quoteCode -- the write did NOT happen."
+            $qBody = ''
+            if (Test-Path "$env:TEMP\day26-quote.json") { $qBody = (Get-Content "$env:TEMP\day26-quote.json" -Raw) }
+            if (-not [string]::IsNullOrWhiteSpace($qBody)) { Note "  body: $($qBody.Trim())" }
+            Note 'The trace stitch verdict below cannot be trusted without it.'
+        }
+
+        # NOW the reads, with the token, so the latency table describes the
+        # endpoint rather than the 401 path.
+        $readCodes = @()
+        1..10 | ForEach-Object {
+            $readCodes += (curl.exe -s -o NUL -w '%{http_code}' --max-time 60 `
+                              -H "Authorization: Bearer $token" "$ApiBaseUrl/api/quotes" 2>$null)
+        }
+        $ok = @($readCodes | Where-Object { $_ -eq '200' }).Count
+        Ok "Authenticated reads: $ok of 10 returned 200 (codes: $((($readCodes | Sort-Object -Unique) -join ', ')))"
     }
 
     Write-Host ''
@@ -187,19 +339,55 @@ foreach ($q in $queries) {
     $path = Join-Path $kqlDir $q.file
     if (-not (Test-Path $path)) { Note "Missing $($q.file)"; continue }
 
-    $text = Get-Content $path -Raw
-    if ([string]::IsNullOrWhiteSpace($text)) { Note "$($q.file) is empty"; continue }
-
-    $result = Invoke-AzText @('monitor', 'log-analytics', 'query', '-w', $wsid,
-                              '--analytics-query', $text, '-o', 'table')
-
-    $outPath = Join-Path $outDir $q.out
     $header = @(
         "Day 26 -- $($q.title)"
-        "Query:  Day26/kql/$($q.file)   (verbatim; also deployed as a workspace saved search)"
+        "Query:  Day26/kql/$($q.file)   (executed verbatim from the file; also deployed as a workspace saved search)"
         "Run at: $(Get-Date -Format o)"
         ''
-    ) -join "`n"
+    ) -join "`n" 
+
+    # THE QUERY IS HANDED TO az AS A FILE, NOT AS A STRING ARGUMENT.
+    #
+    # az supports @<path> for any parameter value, and it reads the file
+    # itself -- so the newlines and the double quotes never pass through
+    # PowerShell's native-command argument handling at all. That handling is
+    # what has produced every wrong answer in this script today: newlines
+    # truncated the query after its first line, and embedded double quotes
+    # (Name !startswith "GET /health") were stripped, leaving a syntax error.
+    # A file has neither problem, and it means the .kql text az executes is
+    # byte-for-byte what is committed and deployed as a saved search.
+    # ErrorActionPreference LOWERED FOR THE CALL, for the third time today.
+    # With it at 'Stop', anything a native command writes to stderr becomes a
+    # TERMINATING error -- so az reporting a bad query killed the script
+    # instead of letting the branch below read the message and carry on to the
+    # next query. Exactly the trap noted in 01-github-oidc.ps1, and I wrote
+    # this call without the guard anyway.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $rawQuery = & az monitor log-analytics query -w $wsid `
+                        --analytics-query "@$path" -o table 2>&1
+        $queryExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+    $result = ($rawQuery -join "`n")
+
+    # AN ERROR AND AN EMPTY RESULT ARE NOT THE SAME THING, and conflating them
+    # is what cost most of today. Invoke-AzText returns $null on a non-zero
+    # exit, so a KQL syntax error arrived here as "no rows" -- which reads as a
+    # statement about the data and is actually a statement about the query.
+    if ($queryExit -ne 0) {
+        Note "$($q.title): THE QUERY FAILED (az exit $queryExit)"
+        foreach ($line in ($result -split "`r?`n" | Where-Object { $_ -match '\S' } | Select-Object -First 4)) {
+            Note "  $($line.Trim())"
+        }
+        ($header + "QUERY FAILED (az exit $queryExit)`n`n" + $result + "`n") |
+            Out-File (Join-Path $outDir $q.out) -Encoding utf8
+        continue
+    }
+
+    $outPath = Join-Path $outDir $q.out
 
     if ([string]::IsNullOrWhiteSpace($result)) {
         # An empty table is a RESULT, not an error, and the difference matters:
@@ -228,12 +416,12 @@ Write-Host 'Trace stitch' -ForegroundColor Cyan
 $stitchQuery = @'
 let ops =
     AppDependencies
-    | where TimeGenerated > ago(1h)
-    | where DependencyType has "Service Bus" or Target has "servicebus.windows.net"
+    | where TimeGenerated > ago(24h)
+    | where DependencyType has "Service Bus" or Target has "servicebus.windows.net" or Name has "Outbox publish"
     | distinct OperationId;
 union
-    (AppRequests     | where TimeGenerated > ago(1h) and OperationId in (ops) | extend Kind = "request"),
-    (AppDependencies | where TimeGenerated > ago(1h) and OperationId in (ops) | extend Kind = "dependency")
+    (AppRequests     | where TimeGenerated > ago(24h) and OperationId in (ops) | extend Kind = "request"),
+    (AppDependencies | where TimeGenerated > ago(24h) and OperationId in (ops) | extend Kind = "dependency")
 | summarize
     requests     = countif(Kind == "request"),
     dependencies = countif(Kind == "dependency"),
@@ -243,8 +431,13 @@ union
 | order by dependencies desc
 '@
 
+# Flattened for the same reason as the file-based queries above: a here-string
+# is multi-line, and multi-line does not survive the trip.
+$stitchOneLine = (($stitchQuery -split "`r?`n" | ForEach-Object { $_.Trim() } |
+                   Where-Object { $_ -ne '' }) -join ' ')
+
 $stitch = Invoke-AzText @('monitor', 'log-analytics', 'query', '-w', $wsid,
-                          '--analytics-query', $stitchQuery, '-o', 'table')
+                          '--analytics-query', $stitchOneLine, '-o', 'table')
 
 $verdictPath = Join-Path $outDir 'trace-stitch-verdict.txt'
 if ([string]::IsNullOrWhiteSpace($stitch)) {

@@ -1,0 +1,17 @@
+﻿Day 26 -- distributed trace verdict: NOT CONFIRMED
+Run at: 2026-09-10T12:36:12.6842006+05:30
+
+No OperationId in the last hour carries two or more AppRequests.
+
+A correctly stitched write produces TWO requests under one OperationId: the
+HTTP call, and the Service Bus consumer (Azure Monitor records a Consumer span
+as a request, because receiving the message is the worker's own incoming
+operation). Seeing one request and no second means one of:
+
+  * no write crossed the boundary in the window -- a GET never leaves the API;
+  * the outbox relay did not publish;
+  * traceparent is not travelling, so the consumer started a NEW trace. This
+    is the dangerous one: both halves look healthy in isolation and nothing
+    reports an error. See ServiceBusQuoteEventPublisher (writes
+    ApplicationProperties["traceparent"]) and QuoteEventProcessorService
+    (reads it and calls SetParentId).

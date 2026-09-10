@@ -1,0 +1,12 @@
+﻿Day 26 -- Dependency breakdown by total time
+Query:  Day26/kql/02-dependency-breakdown.kql   (executed verbatim from the file; also deployed as a workspace saved search)
+Run at: 2026-09-10T12:35:59.7693137+05:30
+DependencyType          Name                             TableName      Target                                                           Calls    FailureRatePct    Failures    MsPerCall    P50    P99    TotalSeconds
+----------------------  -------------------------------  -------------  ---------------------------------------------------------------  -------  ----------------  ----------  -----------  -----  -----  --------------
+SQL                     SQL: quotes                      PrimaryResult  sql-quotes-7mo4cimyk4vnk.database.windows.net | quotes           1612     0                 0           3.1          1.1    35.2   5.05
+SQL                     SQL: quotes                      PrimaryResult  tcp:sql-quotes-7mo4cimyk4vnk.database.windows.net,1433 | quotes  1618     0                 0           2.5          1.1    28.6   4.01
+InProc | Microsoft.AAD  DefaultAzureCredential.GetToken  PrimaryResult  DefaultAzureCredential.GetToken                                  9        0                 0           113.6        79.3   236.8  1.02
+HTTP                    GET /msi/token                   PrimaryResult  localhost:12356                                                  9        0                 0           101.9        76.9   191.2  0.92
+Other                   Outbox publish                   PrimaryResult  Outbox publish                                                   1        0                 0           461.2        461.2  461.2  0.46
+InProc                  verify-password                  PrimaryResult  verify-password                                                  2        0                 0           136.2        92.3   180    0.27
+

@@ -22,14 +22,36 @@
 //
 // The rule thresholds on the errorRatePct column (metricMeasureColumn), so
 // the query returning a row is not by itself the alert condition.
-let LookbackMinutes = 5;
-let MinRequests     = 20;    // below this, the ratio is noise
+// IT MUST PROJECT TimeGenerated, AND THE DEPLOYMENT IS WHAT TAUGHT ME THAT:
+//
+//   BadRequest: Number of evaluation periods must be 1 for queries that do
+//   not project the 'TimeGenerated' column of type 'datetime'
+//
+// The rule requires two CONSECUTIVE failing periods before it fires, and to
+// split its lookback into periods it needs a timestamp to split on. A bare
+// summarize collapses everything to one row with no TimeGenerated at all, so
+// Azure can only offer a single period -- which would have quietly removed
+// the guard against a deployment's brief burst of failures paging someone.
+//
+// bin(TimeGenerated, 5m) makes each bucket one evaluation period, so the
+// minimum-request floor applies PER PERIOD rather than across the whole
+// lookback. That is the stricter and more useful reading: twenty requests
+// spread over ten minutes should not license a ratio about either five-minute
+// window.
+//
+// ago(1h) rather than ago(5m): the rule overrides the time range with its own
+// window, and a five-minute filter here would CLIP the two periods the rule
+// wants to compare. An hour is generous enough for the rule and convenient
+// for running the same text by hand.
+let MinRequests = 20;    // per five-minute bucket; below this the ratio is noise
 AppRequests
-| where TimeGenerated > ago(LookbackMinutes * 1m)
+| where TimeGenerated > ago(1h)
 | where Name !startswith "GET /health"
 | summarize
     total  = sum(ItemCount),
     failed = sumif(ItemCount, Success == false)
+    by bin(TimeGenerated, 5m)
 | where total >= MinRequests
 | extend errorRatePct = round(100.0 * failed / total, 2)
-| project errorRatePct, total, failed
+| project TimeGenerated, errorRatePct, total, failed
+| order by TimeGenerated desc

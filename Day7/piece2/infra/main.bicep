@@ -619,7 +619,7 @@ module alerts 'modules/alerts.bicep' = if (deployAlerts && !empty(alertEmailAddr
     actionGroupName: 'quotes-oncall-${environmentType}'
     actionGroupShortName: 'quotes${environmentType}'
     alertEmailAddress: alertEmailAddress
-    applicationInsightsId: monitoring.outputs.applicationInsightsId
+    logAnalyticsWorkspaceId: monitoring.outputs.logAnalyticsWorkspaceId
     location: location
     tags: tags
     errorRateThresholdPct: errorRateThresholdPct

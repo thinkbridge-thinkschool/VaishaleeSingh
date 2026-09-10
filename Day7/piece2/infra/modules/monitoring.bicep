@@ -193,3 +193,7 @@ output applicationInsightsConnectionString string = applicationInsights.properti
 
 // Day 26: the alert rule is scoped to the component, so main.bicep needs its id.
 output applicationInsightsId string = applicationInsights.id
+
+// Day 26: the alert rule is scoped to the WORKSPACE, not the component, so
+// its query resolves against the workspace schema. See modules/alerts.bicep.
+output logAnalyticsWorkspaceId string = logAnalyticsWorkspace.id
