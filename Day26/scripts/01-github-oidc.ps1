@@ -66,13 +66,56 @@ function Ok   ([string] $m) { Write-Host "  OK    $m" -ForegroundColor Green }
 function Note ([string] $m) { Write-Host "  note  $m" -ForegroundColor Yellow }
 function Die  ([string] $m) { Write-Host "  FAIL  $m" -ForegroundColor Red; exit 1 }
 
+# $ErrorActionPreference IS LOWERED AROUND THE NATIVE CALL, AND IT HAS TO BE.
+#
+# With ErrorActionPreference = 'Stop', Windows PowerShell turns anything a
+# NATIVE command writes to stderr into a terminating error -- even when the
+# command succeeded, and even with 2>$null, because the redirect happens after
+# PowerShell has already decided to throw. `az ad sp show` on an app that has
+# no service principal yet writes "Resource ... does not exist" to stderr and
+# returns non-zero, which is the ANSWER TO THE QUESTION, not a failure. Left
+# alone it kills the script one line before the code that would create it.
+#
+# Same shape as the $args bug in Day24/scripts/04-finish-dev.ps1: a
+# PowerShell default that is right for cmdlets and wrong for az.exe.
 function Invoke-AzJson {
     param([Parameter(Mandatory)] [string[]] $AzArgs)
-    $raw = & az @AzArgs 2>$null
+
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $raw = & az @AzArgs 2>$null
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+
     if ($LASTEXITCODE -ne 0) { return $null }
     $joined = ($raw -join "`n")
     if ([string]::IsNullOrWhiteSpace($joined) -or $joined.Trim() -eq '[]') { return $null }
     try { return $joined | ConvertFrom-Json } catch { return $null }
+}
+
+# Entra ID is EVENTUALLY CONSISTENT, and a fixed Start-Sleep is a guess about
+# how eventual. A registration created a second ago is routinely not yet
+# visible to the next call, so every read that follows a write retries rather
+# than assuming. The failure without this is indistinguishable from a
+# permissions problem: "Resource does not exist".
+function Wait-ForGraph {
+    param(
+        [Parameter(Mandatory)] [scriptblock] $Read,
+        [string] $What = 'object',
+        [int] $Attempts = 12,
+        [int] $DelaySeconds = 5
+    )
+    for ($i = 1; $i -le $Attempts; $i++) {
+        $result = & $Read
+        if ($null -ne $result) { return $result }
+        if ($i -eq 1) { Write-Host "        waiting for $What to replicate" -ForegroundColor DarkGray -NoNewline }
+        else { Write-Host '.' -ForegroundColor DarkGray -NoNewline }
+        Start-Sleep -Seconds $DelaySeconds
+    }
+    Write-Host ''
+    return $null
 }
 function Has { param($o, [string] $n) if ($null -eq $o) { return $false } return ($o.PSObject.Properties.Name -contains $n) }
 
@@ -118,10 +161,15 @@ $appId = $app.appId
 $sp = Invoke-AzJson @('ad', 'sp', 'show', '--id', $appId, '-o', 'json')
 if ($null -eq $sp) {
     if ($PSCmdlet.ShouldProcess($appId, 'create the service principal')) {
-        $sp = Invoke-AzJson @('ad', 'sp', 'create', '--id', $appId, '-o', 'json')
-        if ($null -eq $sp) { Die 'Creating the service principal failed.' }
+        # Retried: the registration may not have replicated yet, and `sp create`
+        # then fails naming the app id, which reads as though the app was never
+        # created rather than as a timing problem.
+        $sp = Wait-ForGraph -What 'the app registration' -Read {
+            Invoke-AzJson @('ad', 'sp', 'create', '--id', $appId, '-o', 'json')
+        }
+        if ($null -eq $sp) { Die 'Creating the service principal kept failing. Re-run in a minute; the registration already exists, so this is idempotent.' }
+        Write-Host ''
         Ok "Service principal: $($sp.id)"
-        Start-Sleep -Seconds 10
     }
 } else {
     Ok "Service principal exists: $($sp.id)"
@@ -159,7 +207,10 @@ foreach ($c in $creds) {
     $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("fc-" + [Guid]::NewGuid().ToString('N') + '.json')
     try {
         ($body | ConvertTo-Json -Depth 5) | Out-File $tmp -Encoding utf8
-        $null = & az ad app federated-credential create --id $appId --parameters "@$tmp" 2>$null
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try { $null = & az ad app federated-credential create --id $appId --parameters "@$tmp" 2>$null }
+        finally { $ErrorActionPreference = $previous }
         if ($LASTEXITCODE -ne 0) { Die "Adding the federated credential '$($c.name)' failed." }
         Ok "Federated credential added: $($c.subject)"
     } finally { if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue } }
@@ -168,7 +219,11 @@ foreach ($c in $creds) {
 # ---------------------------------------------------------------------------
 # 3. Roles, scoped to the resources the workflows actually touch
 # ---------------------------------------------------------------------------
-$principalId = (Invoke-AzJson @('ad', 'sp', 'show', '--id', $appId, '-o', 'json')).id
+$spRecord = Wait-ForGraph -What 'the service principal' -Read {
+    Invoke-AzJson @('ad', 'sp', 'show', '--id', $appId, '-o', 'json')
+}
+if ($null -eq $spRecord) { Die 'The service principal is still not readable. Re-run; everything so far is idempotent.' }
+$principalId = $spRecord.id
 
 function Grant {
     param([string] $Role, [string] $Scope, [string] $What)
@@ -178,8 +233,12 @@ function Grant {
         return
     }
     if (-not $PSCmdlet.ShouldProcess($What, "grant $Role")) { return }
-    $null = & az role assignment create --role $Role --assignee-object-id $principalId `
-                --assignee-principal-type ServicePrincipal --scope $Scope -o none 2>$null
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $null = & az role assignment create --role $Role --assignee-object-id $principalId `
+                    --assignee-principal-type ServicePrincipal --scope $Scope -o none 2>$null
+    } finally { $ErrorActionPreference = $previous }
     if ($LASTEXITCODE -ne 0) { Die "Granting $Role on $What failed (needs Owner or User Access Administrator)." }
     Ok "$Role granted on $What"
 }
