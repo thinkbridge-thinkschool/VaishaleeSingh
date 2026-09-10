@@ -416,12 +416,12 @@ Write-Host 'Trace stitch' -ForegroundColor Cyan
 $stitchQuery = @'
 let ops =
     AppDependencies
-    | where TimeGenerated > ago(1h)
-    | where DependencyType has "Service Bus" or Target has "servicebus.windows.net"
+    | where TimeGenerated > ago(24h)
+    | where DependencyType has "Service Bus" or Target has "servicebus.windows.net" or Name has "Outbox publish"
     | distinct OperationId;
 union
-    (AppRequests     | where TimeGenerated > ago(1h) and OperationId in (ops) | extend Kind = "request"),
-    (AppDependencies | where TimeGenerated > ago(1h) and OperationId in (ops) | extend Kind = "dependency")
+    (AppRequests     | where TimeGenerated > ago(24h) and OperationId in (ops) | extend Kind = "request"),
+    (AppDependencies | where TimeGenerated > ago(24h) and OperationId in (ops) | extend Kind = "dependency")
 | summarize
     requests     = countif(Kind == "request"),
     dependencies = countif(Kind == "dependency"),
