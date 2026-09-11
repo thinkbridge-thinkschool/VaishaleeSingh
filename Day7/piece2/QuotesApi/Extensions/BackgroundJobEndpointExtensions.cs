@@ -6,9 +6,9 @@ namespace QuotesApi.Extensions;
 public static class BackgroundJobEndpointExtensions
 {
     public static IEndpointRouteBuilder MapBackgroundJobEndpoints(
-        this IEndpointRouteBuilder app)
+        this IEndpointRouteBuilder app, string prefix = "/api")
     {
-        var group = app.MapGroup("/api/background-jobs")
+        var group = app.MapGroup($"{prefix}/background-jobs")
             .RequireAuthorization("can-read-quotes");
 
         group.MapPost("/quote-author-reports", (

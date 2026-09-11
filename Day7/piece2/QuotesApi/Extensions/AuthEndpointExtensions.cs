@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using QuotesApi.Configuration;
@@ -25,9 +26,22 @@ namespace QuotesApi.Extensions;
 public static class AuthEndpointExtensions
 {
     public static IEndpointRouteBuilder MapAuthEndpoints(
-        this IEndpointRouteBuilder app)
+        this IEndpointRouteBuilder app, string prefix = "/api")
     {
-        var group = app.MapGroup("/api/auth");
+        // Day 27 -- the strict rate-limit policy, on the whole group.
+        //
+        // THESE ARE THE ENDPOINTS AN ATTACKER CAN REACH WITHOUT A TOKEN, which
+        // is exactly why they are the ones that need a ceiling. Everything
+        // else in this API requires a credential before it does any work; here
+        // the work IS deciding whether a credential is right, and without a
+        // limit that decision can be requested indefinitely. A password is
+        // only as strong as the number of guesses allowed against it.
+        //
+        // Applied to the group rather than per route so /refresh and /logout
+        // are covered too: a refresh token is a credential like any other and
+        // guessing one is the same attack.
+        var group = app.MapGroup($"{prefix}/auth")
+            .RequireRateLimiting(RateLimitingExtensions.AuthPolicy);
 
         // POST /api/auth/register -- create an account and return the same
         // token pair a login would, so a new user is signed in immediately

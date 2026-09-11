@@ -11,6 +11,38 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Day 27 -- a ceiling on request size, BEFORE anything parses the body.
+//
+// THE FIELD VALIDATION WAS ALREADY THERE, AND THAT IS THE POINT. Author is
+// capped at 200 characters and Text at 1000 (QuoteEndpointExtensions), and a
+// collection name must be 3..80 (the aggregate's constructor). None of that
+// runs until the request has been read off the wire and deserialised -- so a
+// caller could send Kestrel's default 30 MB of JSON, have the server buffer
+// and parse all of it, and only then be told the text field is too long. The
+// work is done before the rejection, which is exactly the shape of a cheap
+// denial of service: one client, a slow loop, and a database that scales to
+// zero paying for it.
+//
+// 64 KB, and the number is not arbitrary: the largest legitimate body this
+// API accepts is one quote -- 1000 characters of text, 200 of author, a URL --
+// which is under 2 KB. Sixty-four thousand leaves two orders of magnitude of
+// headroom for anything a future endpoint might reasonably take, and still
+// refuses a megabyte at the transport layer, where refusing is free.
+//
+// Configurable, because a limit that cannot be raised without a deployment is
+// a limit somebody will remove entirely the first time it is inconvenient.
+builder.WebHost.ConfigureKestrel(kestrel =>
+{
+    kestrel.Limits.MaxRequestBodySize =
+        builder.Configuration.GetValue<long?>("Limits:MaxRequestBodyBytes") ?? 64 * 1024;
+
+    // Headers have their own budget, and it is separate for a reason: a body
+    // limit does nothing about a request that sends megabytes of headers and
+    // never reaches a body at all.
+    kestrel.Limits.MaxRequestHeadersTotalSize =
+        builder.Configuration.GetValue<int?>("Limits:MaxRequestHeaderBytes") ?? 32 * 1024;
+});
+
 // --- Secrets ---------------------------------------------------------------
 // Connection strings and keys are never committed. They come from, in order
 // of preference: Key Vault when a vault is configured (deployed
@@ -92,6 +124,12 @@ builder.Services.AddInfrastructure(builder.Configuration);
 // credentials.
 builder.Services.AddSpaCors(builder.Configuration);
 
+// Day 27 -- rate limiting. Registered here; the middleware is turned on below,
+// after authentication, and the strict policy is attached to /api/auth in
+// AuthEndpointExtensions. See Extensions/RateLimitingExtensions.cs for why the
+// limits are the numbers they are.
+builder.Services.AddQuotesRateLimiting();
+
 // Distributed tracing (spans for requests, EF queries, outbound HTTP, plus
 // this app's own custom spans). See ObservabilityExtensions.cs -- in
 // particular for why the OTLP exporter is only wired up when an endpoint is
@@ -116,6 +154,14 @@ app.UseMiddleware<CorrelationIdMiddleware>();
 // Catches any exception that escapes an endpoint and turns it into a clean
 // ProblemDetails response instead of leaking a raw .NET stack trace.
 app.UseMiddleware<ExceptionHandlingMiddleware>();
+
+// Day 27 -- security headers.
+//
+// ABOVE UseStaticFiles, deliberately. Static files are a response like any
+// other and the SPA's own HTML is the response a browser applies a CSP to --
+// registering this below the static middleware would leave exactly the
+// documents that need the policy without one.
+app.UseMiddleware<SecurityHeadersMiddleware>();
 
 // Backend-owned static assets (quote backgrounds) served from wwwroot.
 app.UseStaticFiles();
@@ -278,9 +324,22 @@ app.UseCors(CorsExtensions.SpaPolicyName);
 app.UseAuthentication();
 app.UseAuthorization();
 
+// Day 27 -- rate limiting runs AFTER authentication, and the order is a
+// choice rather than a convention.
+//
+// Before authentication would throttle slightly earlier and save the token
+// validation on a rejected request. After it means the limiter can see who
+// the caller is, which is what makes a per-account policy possible later
+// without moving this line -- and it means a 429 is only ever returned to a
+// request that was otherwise going to be served, so a throttled caller and an
+// unauthenticated one are never confused for each other in the logs.
+app.UseRateLimiter();
+
 // /api/auth/* is intentionally mapped without any auth requirement of its
 // own -- these are the endpoints that HAND OUT tokens in the first place.
-app.MapAuthEndpoints();
+// Mapped in the versioned loop below with everything else, so /api/v1/auth
+// exists too: a client pinned to v1 must be able to obtain a token without
+// dropping back to an unversioned path.
 
 // Health endpoints are mapped without any authorization requirement: an
 // orchestrator probing a container has no token to present, and a probe
@@ -288,8 +347,37 @@ app.MapAuthEndpoints();
 // response body is deliberately free of anything sensitive.
 app.MapQuotesHealthChecks();
 
-app.MapQuoteEndpoints();
-app.MapCollectionEndpoints();
+// Day 27 -- API VERSIONING, ADDITIVELY.
+//
+// Every group is mapped TWICE: once at its existing path and once under
+// /api/v1. Nothing that works today stops working, which is the only way to
+// introduce versioning to an API that already has a client -- the SPA and the
+// verification scripts move to /v1 in their own commit, and the unversioned
+// routes stay as deprecated aliases until they do.
+//
+// WHY ROUTE GROUPS AND NOT THE Asp.Versioning PACKAGE. The package brings
+// version discovery, per-version OpenAPI documents and a policy for how
+// clients select a version -- machinery that earns its place when there are
+// several live versions and consumers you cannot phone. There is one version
+// and one consumer. A second route prefix does what the exercise asks with no
+// new dependency and no new failure mode.
+//
+// WHY NOT A URL REWRITE, which would have been less code. Rewriting /api/v1/x
+// to /api/x means the two paths can never differ -- and being able to differ
+// is the entire point of a version. v2 has to be allowed to change a response
+// shape that v1 keeps.
+//
+// THE COST, STATED: the route table now holds each endpoint twice, so route
+// counts and per-endpoint metrics double. The p50/p99 query from Day 26 groups
+// by request name, which means /api/quotes and /api/v1/quotes will appear as
+// separate rows for the same handler.
+foreach (var prefix in new[] { "/api", "/api/v1" })
+{
+    app.MapAuthEndpoints(prefix);
+    app.MapQuoteEndpoints(prefix);
+    app.MapCollectionEndpoints(prefix);
+    app.MapBackgroundJobEndpoints(prefix);
+}
 
 // Day 21 -- GET /api/cache/stats. Mapped in every environment, for the same
 // reason as the outbox status endpoint below: it is what an operator reads when
@@ -303,7 +391,8 @@ app.MapOutboxEndpoints();
 
 // Day 18 -- requests enqueue quote-author reports and return 202 immediately;
 // QueuedBackgroundJobService drains the bounded channel outside the request.
-app.MapBackgroundJobEndpoints();
+// Mapped in the versioned loop above. Leaving the call here as well mapped the
+// same pattern twice and would have thrown on the first request to it.
 
 // Day 11 -- the deliberately slow endpoint used for performance profiling,
 // plus the seed/index/stats helpers needed to profile it. Mapped LAST and,

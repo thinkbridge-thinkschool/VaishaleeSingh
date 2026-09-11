@@ -34,7 +34,7 @@ namespace QuotesApi.Extensions;
 public static class QuoteEndpointExtensions
 {
     public static IEndpointRouteBuilder MapQuoteEndpoints(
-        this IEndpointRouteBuilder app)
+        this IEndpointRouteBuilder app, string prefix = "/api")
     {
         // MapGroup("/api/quotes") means every route below is automatically
         // prefixed with /api/quotes (so "/" really means GET /api/quotes).
@@ -44,7 +44,7 @@ public static class QuoteEndpointExtensions
         // adds its own, more specific, scope policy on top of that
         // baseline, because "logged in" and "allowed to write" are
         // different questions with different answers per endpoint.
-        var group = app.MapGroup("/api/quotes")
+        var group = app.MapGroup($"{prefix}/quotes")
             .RequireAuthorization();
 
         // GET /api/quotes?page=1&size=10 — list quotes, paged.
