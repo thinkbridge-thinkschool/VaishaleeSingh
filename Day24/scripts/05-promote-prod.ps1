@@ -272,6 +272,45 @@ if ($null -eq $envs) {
     }
 }
 
+# --- The exists flags must match what actually exists ---
+#
+# THIS PARAMETER IS A LIE IN BOTH DIRECTIONS, AND BOTH HAVE HAPPENED HERE.
+#
+#   true  with no container app -> fetchLatestImage reads a resource that is
+#         not there: "Failed to obtain the resource body", and the deployment
+#         dies partway.
+#   false with a container app  -> the image resolves to the aci-helloworld
+#         placeholder and the deployment REVERTS production to Microsoft's
+#         sample app while reporting success. That is the dangerous one.
+#
+# Prod here is created and torn down between exercises, so the correct value
+# changes every time and a fixed value in the parameter file is wrong half the
+# time. Asking Azure costs one call.
+foreach ($p in @(
+    @{ App = $ApiContainerApp; Param = 'quotesApiExists' }
+    @{ App = $WebContainerApp; Param = 'webAppExists' }
+)) {
+    $probe = Invoke-AzText @('containerapp', 'show', '-n', $p.App, '-g', $ResourceGroup, '--query', 'name', '-o', 'tsv')
+    $appExists = ($probe.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($probe.Text))
+
+    $declared = $null
+    if ($paramText -match "(?m)^param\s+$($p.Param)\s*=\s*(true|false)") { $declared = ($Matches[1] -eq 'true') }
+
+    if ($null -eq $declared) {
+        Note "$($p.Param) is not set in main.prod.bicepparam; skipping that check."
+    } elseif ($declared -ne $appExists) {
+        Note "main.prod.bicepparam says $($p.Param) = $($declared.ToString().ToLower()), but $($p.App) $(if ($appExists) { 'exists' } else { 'does not exist' })."
+        if ($appExists) {
+            Note 'Deploying with false would resolve the image to the aci-helloworld'
+            Note 'placeholder and revert this app to it, reporting success.'
+        } else {
+            Note 'Deploying with true would fail reading an app that is not there.'
+        }
+        Die "Set: param $($p.Param) = $($appExists.ToString().ToLower())"
+    }
+    Ok "$($p.Param) = $($declared.ToString().ToLower()) matches reality"
+}
+
 # --- Resolve each app's tag from what dev is running, then verify it ---
 function Get-RunningTag {
     param([Parameter(Mandatory)] [string] $DevApp)

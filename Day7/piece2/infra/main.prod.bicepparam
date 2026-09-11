@@ -70,7 +70,25 @@ param apiContainerAppName = 'quotes-api-prod'
 // It already half-happened here: the first prod create left a placeholder
 // revision active alongside the real one. main.dev.bicepparam carries the
 // long version of this note, written from having had it happen there.
-param quotesApiExists = true
+// FALSE, AND IT HAS TO KEEP FLIPPING -- THAT IS THE POINT OF THE CHECK IN
+// 05-promote-prod.ps1 RATHER THAN A FIXED VALUE HERE.
+//
+// The template reads the running app's image when this is true, so it must
+// match reality:
+//
+//   false  when no container app exists  -- a fresh environment. With true,
+//          fetchLatestImage tries to read a resource that is not there and the
+//          deployment fails with "Failed to obtain the resource body".
+//   true   once the app exists and runs a promoted image. With false, the next
+//          infra-only update resolves the image to aci-helloworld and reverts
+//          production to Microsoft's sample app, reporting success while it
+//          does it.
+//
+// Both halves have now bitten this project. It sits at false because THIS prod
+// is torn down between exercises, so from-scratch is the normal path -- and
+// the preflight refuses to deploy when the value disagrees with what exists,
+// which is the part that actually protects it.
+param quotesApiExists = false
 
 // REPLACE BEFORE DEPLOYING. See the corresponding note in main.dev.bicepparam:
 // the region probe that briefly justified 'centralindia' here was invalid, and
@@ -426,6 +444,6 @@ param webContainerAppName = 'quotes-web-prod'
 // True for the same reason as quotesApiExists above: quotes-web-prod exists
 // and runs a promoted image, so the template reads it instead of overwriting
 // it with the placeholder on the next infra-only update.
-param webAppExists = true
+param webAppExists = false
 param webMinReplicas = 0
 param webMaxReplicas = 2
