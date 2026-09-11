@@ -13,6 +13,11 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
+    # Day 27. See the file for why these live here and not only in the API,
+    # and why the same include is repeated inside the two location blocks
+    # below that declare add_header of their own.
+    include /etc/nginx/security-headers.conf;
+
     # --- the API, proxied ---------------------------------------------------
     # This block is what replaces the Static Web App's linked backend, and it is
     # why Day13/quotes-web/src/environments/environment.production.ts needs no
@@ -32,7 +37,22 @@ server {
         proxy_http_version 1.1;
         proxy_set_header   Host              $proxy_host;
         proxy_set_header   X-Real-IP         $remote_addr;
-        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        # Day 27 -- OVERWRITE X-Forwarded-For, do not append to it.
+        #
+        # $proxy_add_x_forwarded_for takes whatever the CLIENT sent in that
+        # header and appends the real address to it. The API's rate limiter
+        # partitions on the FIRST entry, on the documented assumption that the
+        # first entry is the ingress's own observation and not something the
+        # caller chose. Through this proxy that assumption was false: a caller
+        # who sends "X-Forwarded-For: <anything>" lands in a fresh bucket for
+        # every value, and the ten-per-minute limit on /api/auth becomes
+        # decorative on the exact path the SPA uses.
+        #
+        # $remote_addr is nginx's own observation of the peer, so the header
+        # this proxy sends is a fact rather than a claim. The chain is lost --
+        # acceptable, because nothing downstream reads it and no proxy sits in
+        # front of this one that we do not control.
+        proxy_set_header   X-Forwarded-For   $remote_addr;
         proxy_set_header   X-Forwarded-Proto $scheme;
 
         # Host is set to $proxy_host, not the incoming $host. Azure Container
@@ -71,6 +91,11 @@ server {
     location ~* \.(?:js|css|woff2?|png|jpe?g|webp|svg|ico)$ {
         expires 1y;
         add_header Cache-Control "public, immutable";
+        # Re-included because this block declares an add_header of its own,
+        # which discards every header inherited from the server level. Without
+        # this line the script chunks -- the files most worth protecting with
+        # nosniff -- would be the only ones served bare.
+        include /etc/nginx/security-headers.conf;
         try_files $uri =404;
     }
 
@@ -88,6 +113,9 @@ server {
     # chunk hashes.
     location = /index.html {
         add_header Cache-Control "no-cache";
+        # Same reason as above, and this is the response it matters most on:
+        # index.html is the document the Content-Security-Policy governs.
+        include /etc/nginx/security-headers.conf;
     }
 
     gzip              on;
