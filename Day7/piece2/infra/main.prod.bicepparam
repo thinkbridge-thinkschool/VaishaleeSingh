@@ -88,7 +88,7 @@ param apiContainerAppName = 'quotes-api-prod'
 // is torn down between exercises, so from-scratch is the normal path -- and
 // the preflight refuses to deploy when the value disagrees with what exists,
 // which is the part that actually protects it.
-param quotesApiExists = false
+param quotesApiExists = true
 
 // REPLACE BEFORE DEPLOYING. See the corresponding note in main.dev.bicepparam:
 // the region probe that briefly justified 'centralindia' here was invalid, and
@@ -312,11 +312,26 @@ param containerAppsEnvironmentResourceGroup = 'thinkschool-dev-rg'
 // comfortably, the deployment goes green, and the failure waits until
 // scale-out — under the only load that would ever have justified running prod.
 //
-// 4 x 0.5 vCPU keeps the ceiling inside the quota. minReplicas stays at 2 —
-// one replica means every deployment and every node recycle is downtime, and it
-// gives the platform nowhere to drain to. Scale to zero would be a cold start
-// on a customer request.
-param apiMinReplicas = 2
+// 4 x 0.5 vCPU keeps the ceiling inside the quota.
+//
+// SCALE TO ZERO, WHICH IS NOT WHAT A PRODUCTION ENVIRONMENT SHOULD DO. This
+// was 2, with the reasoning still worth keeping: one replica makes every
+// deployment and every node recycle a moment of downtime, and zero puts a cold
+// start in front of a customer's request.
+//
+// It is 0 anyway, because of what this environment is FOR. It has no
+// customers; it exists to be shown and to prove the promotion path works, and
+// it runs on a student subscription with a fixed credit. At minReplicas 2 the
+// only way to stop it consuming that credit was to delete the whole stack
+// between uses -- and that meant fifteen minutes and three manual steps before
+// it could be shown again, plus a red build on every merge to main in the
+// meantime. Scale to zero buys a permanently reachable environment for
+// approximately nothing, at the price of a 20-40 second first request.
+//
+// On an environment with users this is the wrong value and should be 2. The
+// distinction being made is between "production" as a workload and
+// "production" as a deployment target, and this is the second one.
+param apiMinReplicas = 0
 param apiMaxReplicas = 4
 param apiCpu = '0.5'
 param apiMemory = '1Gi'
@@ -346,7 +361,11 @@ param sqlSkuName = 'GP_S_Gen5'
 param sqlSkuTier = 'GeneralPurpose'
 param sqlSkuCapacity = 2
 param sqlUseServerless = true
-param sqlAutoPauseDelayMinutes = -1
+// Auto-pause after an hour idle, rather than never (-1). Same reasoning as
+// apiMinReplicas above: a serverless database that never pauses bills two
+// vCores around the clock, and nothing here is running around the clock. The
+// first query after a pause waits for the database to resume -- seconds, once.
+param sqlAutoPauseDelayMinutes = 60
 param sqlDatabaseName = 'quotes'
 param sqlMaxSizeBytes = 34359738368
 param sqlBackupStorageRedundancy = 'Geo'
@@ -444,6 +463,6 @@ param webContainerAppName = 'quotes-web-prod'
 // True for the same reason as quotesApiExists above: quotes-web-prod exists
 // and runs a promoted image, so the template reads it instead of overwriting
 // it with the placeholder on the next infra-only update.
-param webAppExists = false
+param webAppExists = true
 param webMinReplicas = 0
 param webMaxReplicas = 2
