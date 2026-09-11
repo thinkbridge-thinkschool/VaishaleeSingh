@@ -70,6 +70,7 @@ public sealed class CollectionQueries : ICollectionQueries
 
     public async Task<CollectionDetail?> GetDetailAsync(
         int id,
+        string ownerId,
         CancellationToken cancellationToken = default)
     {
         // One query, projecting a nested collection. The join from
@@ -86,7 +87,11 @@ public sealed class CollectionQueries : ICollectionQueries
         // query per parent row.
         return await _db.Collections
             .AsNoTracking()
-            .Where(c => c.Id == id)
+            // Owner in the WHERE, not in a check afterwards. The row for
+            // somebody else's collection never leaves the database, so there
+            // is no moment at which the wrong data exists in memory waiting
+            // for an if-statement to catch it.
+            .Where(c => c.Id == id && c.OwnerId == ownerId)
             .Select(c => new CollectionDetail(
                 c.Id,
                 c.Name,
