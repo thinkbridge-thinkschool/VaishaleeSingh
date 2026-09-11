@@ -383,24 +383,42 @@ try {
 # ===========================================================================
 Step '3. What this will cost, continuously'
 # ===========================================================================
+# READ FROM THE PARAMETER FILE, NOT TYPED OUT HERE.
+#
+# This block used to be a fixed here-string listing "apiMinReplicas = 2" and
+# "sqlAutoPauseDelayMinutes = -1". Those were true when it was written. When
+# the parameters changed to 0 and 60, the warning kept printing the old pair --
+# so the one screen whose entire job is to tell the operator what this will
+# cost was telling them about an environment that no longer existed. A cost
+# warning that is wrong is worse than no cost warning, because it is trusted.
+$costParams = @(
+    @{ Name = 'apiMinReplicas';             Note = 'replicas kept running with no traffic (0 = scale to zero)' }
+    @{ Name = 'sqlAutoPauseDelayMinutes';   Note = 'minutes idle before the database pauses (-1 = never)' }
+    @{ Name = 'sqlSkuCapacity';             Note = 'vCores while the database is awake' }
+    @{ Name = 'sqlBackupStorageRedundancy'; Note = 'backup storage (Geo costs more than Local)' }
+    @{ Name = 'logDailyQuotaGb';            Note = 'ingestion cap in GB (-1 = uncapped)' }
+)
+
+Write-Host '  What this environment bills, read from main.prod.bicepparam right now:' -ForegroundColor Yellow
+Write-Host ''
+foreach ($c in $costParams) {
+    $value = '(not set)'
+    if ($paramText -match "(?m)^param\s+$($c.Name)\s*=\s*'?([^'\r\n]+?)'?\s*$") { $value = $Matches[1].Trim() }
+    Write-Host ("    {0,-28} {1,-10} {2}" -f $c.Name, $value, $c.Note) -ForegroundColor Yellow
+}
+Write-Host ''
 Write-Host @'
-  Prod is deliberately NOT dev. These four differences are the ones that bill
-  whether or not anybody uses the app:
+  Whether that is cheap or expensive depends entirely on those values. Scaled
+  to zero with the database auto-pausing, an idle environment costs close to
+  nothing and can be left standing. With replicas pinned above zero and
+  auto-pause off, it bills around the clock whether or not anybody uses it --
+  correct for an environment with users, and a steady drain on a subscription
+  with a fixed credit.
 
-    apiMinReplicas = 2              two replicas always on; dev is 0
-    sqlAutoPauseDelayMinutes = -1   serverless SQL never pauses; dev pauses
-                                    after 60 minutes. 2 vCores, continuous
-    sqlBackupStorageRedundancy Geo  geo-redundant backup storage; dev is Local
-    logDailyQuotaGb = -1            NO ingestion cap. Dev has 1 GB -- and this
-                                    project has already blown that cap once
-                                    with a log flood, which in prod would have
-                                    had no ceiling at all
+  Either way it is removable in one command, which is the reason this exercise
+  uses deployment stacks:
 
-  Every one of those is correct for a real production environment. All of them
-  are continuous spend on a subscription with finite credits. `azd down` or
-  `az stack sub delete --name quotes-prod --action-on-unmanage deleteAll`
-  removes the lot when you are done -- which is the reason this exercise uses
-  deployment stacks in the first place.
+    az stack sub delete --name quotes-prod --action-on-unmanage deleteAll --yes
 '@ -ForegroundColor Yellow
 
 if (-not $IAcceptTheCost) {

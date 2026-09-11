@@ -473,8 +473,18 @@ if ([string]::IsNullOrWhiteSpace($ProdRegistry)) {
     # which reads as "the role was never created" and sent me looking at
     # replication delays and at whether the create had silently failed. It was
     # neither. The full definition id resolves first time.
-    $importRoleId = (Invoke-AzText @('role', 'definition', 'list', '--name', $importRoleName,
-                                     '--query', '[0].id', '-o', 'tsv')).Text.Trim()
+    # Invoke-AzJson, because that is the helper THIS script defines. The first
+    # version called Invoke-AzText, whose name I carried over from
+    # 05-promote-prod.ps1 -- two scripts, two helper sets, and a name that
+    # exists in one of them. It died with "The term 'Invoke-AzText' is not
+    # recognized" after the grants above had already been made, which is the
+    # worst place to stop: half applied, and the message says nothing about
+    # what was or was not done.
+    $importRoleDef = Invoke-AzJson @('role', 'definition', 'list', '--name', $importRoleName, '-o', 'json')
+    $importRoleId = ''
+    if ($null -ne $importRoleDef -and @($importRoleDef).Count -gt 0) {
+        $importRoleId = @($importRoleDef)[0].id
+    }
     if ([string]::IsNullOrWhiteSpace($importRoleId)) {
         Die "The custom role '$importRoleName' has no definition id. Check: az role definition list --custom-role-only true -o table"
     }
