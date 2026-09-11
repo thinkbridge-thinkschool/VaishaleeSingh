@@ -278,18 +278,88 @@ operator remembers to select.
 
 ## Two environments, two merges
 
-`main` deploys **dev**. `production` deploys **prod**. Nothing deploys both.
+`dev` deploys **dev**. `main` deploys **prod**. Nothing deploys both.
 
-- `day17-api-deploy.yml` and `day24-web-deploy.yml` trigger on `main` and are
-  scoped to dev's resources.
-- `prod-deploy.yml` triggers only on `production`, runs under a GitHub
-  Environment named `production` so a required reviewer gates it, and
-  **promotes** — it imports the already-built image and never compiles.
-- The OIDC principal holds `AcrPush` and `Contributor` on each environment's
-  resources *separately*, never one Contributor at the subscription. With a
-  subscription-wide grant the separate branch, the environment and the reviewer
-  would all be procedure rather than permission, and procedure is what gets
-  bypassed at 2am.
+| Branch | Deploys to | Workflow | What it does |
+|---|---|---|---|
+| feature | nothing | `ci.yml` | Tests only |
+| `dev` | dev | `day17-api-deploy.yml`, `day24-web-deploy.yml` | Tests, **builds** the image, pushes it, rolls the dev apps |
+| `main` | prod | `prod-deploy.yml` | **Promotes** the image dev is running — never builds |
+
+The trunk is what is live, so the branch someone is on tells them which
+environment they are about to affect.
+
+The branch that BUILDS is the one that cannot reach production, which is the
+property worth having: what `dev` produces has not been promoted or exercised
+yet. `prod-deploy.yml` runs under a GitHub Environment named `production` so a
+required reviewer gates it, and it imports rather than compiles.
+
+The OIDC principal holds its roles on each environment's resources
+*separately*, never one Contributor at the subscription. With a
+subscription-wide grant the two branches, the environment and the reviewer
+would all be procedure rather than permission, and procedure is what gets
+bypassed at 2am.
+
+### Proven end to end
+
+One trivial change pushed through all three levels:
+
+```
+feature branch  →  ci only, no deploy
+dev             →  day17-api-deploy builds quotes-api:18409c311da8, rolls dev
+main            →  prod-deploy imports that tag, rolls prod
+```
+
+```
+dev    cr7mo4cimyk4vnk.azurecr.io/quotes-api:18409c311da8
+prod   crwhppc5qu7yzzg.azurecr.io/quotes-api:18409c311da8
+```
+
+**Different registry, same tag.** That single line is the deliverable: prod is
+running the bytes dev built and tested, not a second compilation of the same
+source. The promotion log says so from the other side — *"quotes-api-dev is
+running: …:18409c311da8 / Promoting quotes-api:18409c311da8 / Dev built and
+deployed this tag."*
+
+The `quotes-web` half promoted an older tag in the same run, and that is
+correct rather than a miss: the change did not touch `Day13/quotes-web/**`, so
+no new front-end image existed and prod received what dev was running.
+
+### AcrPush does not include import, which cost the last attempt
+
+The promotion reached the import step and stopped:
+
+```
+(AuthorizationFailed) ... does not have authorization to perform action
+'Microsoft.ContainerRegistry/registries/importImage/action'
+```
+
+`az acr import` is a **control-plane** operation. `AcrPush` is data-plane —
+pull and push — so a principal that may push every image in the registry still
+may not import one. This is the second time this registry's permissions split
+along that line: `AcrPush` also lacks the ARM read that `az acr login`
+performs, which is why `Reader` was already granted beside it. "It can push,
+so surely it can import" was the assumption, and it was wrong.
+
+Fixed with a custom role holding exactly two actions —
+`registries/importImage/action` and `registries/read` — rather than
+Contributor, which would also let the pipeline delete the registry, rewrite
+its network rules and re-enable the admin account Day 25 turned off.
+
+Two things about that role are worth recording because both read as something
+else:
+
+- `az role assignment create --role "<custom role name>"` answered **`Role
+  '...' doesn't exist`** while `az role definition list --custom-role-only
+  true` listed it plainly. Name resolution is reliable for built-in roles and
+  not for custom ones; the full definition id works first time. That message
+  sent me looking at replication delays and at whether the create had silently
+  failed, and it was neither.
+- The script's own error handler printed *"needs Owner or User Access
+  Administrator"* for every failure cause, because it swallowed az's stderr.
+  A generic reason in place of the real one is a guess wearing the clothes of
+  a diagnosis. It now prints az's message and retries, since one cause here
+  genuinely is transient.
 
 ### One tag per app, not one per release — which the first run proved
 
