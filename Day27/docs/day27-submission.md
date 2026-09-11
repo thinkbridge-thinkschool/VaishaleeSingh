@@ -13,6 +13,106 @@ useful thing in the day.
 
 ---
 
+## 0. The three things the exercise asks for
+
+> *"Paste the threat model, the private-endpoint change, and the ZAP baseline
+> summary with what you fixed."*
+
+### (a) Threat model — STRIDE-lite
+
+Full document: `Day27/docs/day27-threat-model.md`. Six trust boundaries, six
+prompts each. Summary of what it found:
+
+| # | Boundary | Threats already closed before today | Found open today | Action |
+|---|---|---|---|---|
+| 1 | Browser → API | JWT signed from Key Vault; Entra audience validated; ProblemDetails hides internals | **Any user could read/modify another user's collections (IDOR)**; no rate limit on `/auth`; no security headers; no request size limit | Fixed, all four |
+| 2 | API → SQL | Entra-only auth — no password exists; EF parameterises; contained user with no server role | `AllowAllWindowsAzureIps` (admits *every* Azure tenant) + 3 stale operator IPs; public network path | Firewall reduced to one reconciled rule; public path **accepted**, evidenced in (b) |
+| 3 | API → Service Bus → worker | `disableLocalAuth`; managed identity both ends; dead-letter after 5; traceparent propagated | — | — |
+| 4 | API → Key Vault | Vault created empty; app holds Secrets *User*, not Officer; no `@secure()` copies | — | — |
+| 5 | CI/CD → Azure | OIDC, no stored secret; per-environment roles; prod promotes rather than rebuilds | Prod deploy trigger named a branch that does not exist; preflight asked a question the pipeline lacked permission to answer | Both fixed |
+| 6 | Operator → everything | Diagnostics endpoints not *registered* in production — measured 404 on both environments | Operator IP rules outliving their purpose | Removed |
+
+Two rows carry the day's real weight: the IDOR in boundary 1 (§1), and the
+firewall tightening in boundary 2, which caused an outage (§5).
+
+### (b) The private-endpoint change: measured impossible, and what replaced it
+
+There is no private endpoint, and this is the evidence rather than an excuse.
+
+```
+# Is the environment VNet-integrated?
+az containerapp env show -n cae-7mo4cimyk4vnk -g thinkschool-dev-rg \
+  --query "properties.vnetConfiguration"
+→ null                       # Consumption-only
+
+# Can a second, VNet-integrated environment be created?
+→ MaxNumberOfGlobalEnvironmentsInSubExceeded
+```
+
+Three facts, and together they close the door:
+
+1. VNet integration is fixed **at environment creation** and cannot be added
+   afterwards.
+2. The existing environment is Consumption-only with `vnetConfiguration: null`.
+3. The subscription permits exactly **one** Container Apps environment — which
+   dev and prod already share.
+
+So the data tier cannot be put behind a private endpoint on this subscription.
+Writing the Bicep for one would produce a template that cannot deploy and a
+claim that cannot be tested.
+
+**What changed instead**, on both SQL servers:
+
+| Before | After |
+|---|---|
+| `AllowAllWindowsAzureIps` (0.0.0.0 — every Azure tenant's resources, not just ours) | removed |
+| 3 × `QueryEditorClientIPAddress_*` — operator home addresses, permanently open | removed |
+| — | exactly one rule: the container apps' current outbound address |
+
+**Accepted risk, stated plainly:** SQL remains reachable over the public
+network path, defended by Entra-only authentication and one IP rule. That makes
+`azureADOnlyAuthentication` a single point of prevention — one setting change
+removes the wall and nothing would notice. An alert on that property is the
+highest-value open item in this document.
+
+**And this change caused an outage the same day.** The single rule named an
+address that is not stable. §5 has the full account; the durable fix is
+`Day27/scripts/01-reconcile-sql-firewall.ps1`, which makes the firewall match
+the apps' actual egress rather than a remembered constant.
+
+### (c) ZAP baseline summary, with what was fixed
+
+Run against dev, both origins, before and after the fixes.
+
+| Target | before | after |
+|---|---|---|
+| `quotes-web-dev` | 0 FAIL / 6 WARN / 61 PASS | **0 FAIL / 5 WARN / 62 PASS** |
+| `quotes-api-dev` | 0 FAIL / 4 WARN / 63 PASS | **0 FAIL / 2 WARN / 65 PASS** |
+
+**Fixed as a result of the scan:**
+
+| # | What | Fix |
+|---|---|---|
+| 10035 | HSTS missing on the API | `if (IsHttps)` is false behind an ingress that terminates TLS — the header never shipped. Now reads `X-Forwarded-Proto`. |
+| 10036 | nginx announced its exact version | `server_tokens off` |
+| 90004 | No cross-origin isolation headers | `Cross-Origin-Resource-Policy: same-origin` on both origins; `Cross-Origin-Opener-Policy` on the front end |
+
+**Refused, deliberately:** COEP `require-corp`. It requires every subresource
+to opt in, buys nothing without SharedArrayBuffer, and fails by silently not
+loading resources. This is why the web origin sits at 5 warnings and not 4 —
+the remaining `90004` is a decision, not an omission.
+
+**Accepted, with reasons:** `10015` cache-control (index.html must be
+`no-cache`; it names the current chunk hashes), `10049` cacheable assets
+(fingerprinted and `immutable` by design) and non-storable API responses (an
+API declining to be cached is correct), `10055` `style-src 'unsafe-inline'`
+(Angular injects component styles at runtime; removing it blanks the app —
+`script-src` has no such allowance), `10109` SPA notice (informational).
+
+Full per-finding verdicts in §6; reports in `Day27/verification/`.
+
+---
+
 ## 1. The finding that mattered: broken object-level authorization
 
 Three of the five `/api/collections` endpoints had no ownership check at all.
@@ -176,10 +276,24 @@ still work — not by observing that the deployment went green.
 Run against **dev** only; prod's error-rate alert is live and a scan would fire
 it. Both origins scanned. Reports in `Day27/verification/`.
 
-| Target | FAIL | WARN | PASS |
-|---|---|---|---|
-| `quotes-web-dev` | 0 | 6 | 61 |
-| `quotes-api-dev` (`/health`) | 0 | 4 | 63 |
+Scanned twice: once to find things, once after fixing them.
+
+| Target | before | after |
+|---|---|---|
+| `quotes-web-dev` | 0 FAIL / 6 WARN / 61 PASS | **0 FAIL / 5 WARN / 62 PASS** |
+| `quotes-api-dev` (`/health`) | 0 FAIL / 4 WARN / 63 PASS | **0 FAIL / 2 WARN / 65 PASS** |
+
+Cleared on the rescan: `10035` and `90004` on the API — the latter now reads
+`Insufficient Site Isolation Against Spectre Vulnerability: PASS` — and `10036`
+on the web.
+
+**One prediction was wrong and is worth recording.** The web origin was
+expected to drop to 4 warnings; it dropped to 5. `90004` still warns there,
+because on the front end that rule wants Cross-Origin-Embedder-Policy
+specifically, and COEP is the one header this pass refused to set. So the
+remaining warning is the visible shape of a decision, not something missed —
+which is the correct outcome, but only because the decision was written down
+before the scan rather than after it.
 
 An earlier web run is **discarded rather than reported**: it executed while the
 container was running an image the pipeline never built, and its results cannot
@@ -193,10 +307,10 @@ timed out`, which looks like an unreachable host rather than a sleeping one.
 
 | # | Finding | Where | Verdict |
 |---|---|---|---|
-| 10035 | Strict-Transport-Security not set | API | **Fixed** — see below |
-| 10036 | Server leaks version information | web | **Fixed.** `server_tokens off`. nginx announced its patch level on every response, which tells an attacker which CVEs to try first. |
-| 90004 | Cross-Origin-Resource-Policy missing | API | **Fixed.** `same-origin`. Nothing legitimate embeds this API cross-origin. |
-| 90004 | Cross-Origin-Embedder-Policy missing | web | **Partly fixed, partly refused.** COOP and CORP added. COEP `require-corp` deliberately not set: it requires every subresource to opt in, buys nothing without SharedArrayBuffer, and fails by silently not loading resources. Adding a header because a scanner named it, at the risk of blanking the app, is how a security pass makes a site worse. |
+| 10035 | Strict-Transport-Security not set | API | **Fixed, confirmed by rescan** — see below |
+| 10036 | Server leaks version information | web | **Fixed, confirmed by rescan.** `server_tokens off`. nginx announced its patch level on every response, which tells an attacker which CVEs to try first. |
+| 90004 | Cross-Origin-Resource-Policy missing | API | **Fixed, confirmed by rescan.** `same-origin`. Nothing legitimate embeds this API cross-origin. |
+| 90004 | Cross-Origin-Embedder-Policy missing | web | **Refused, and still warns.** COOP and CORP added. COEP `require-corp` deliberately not set: it requires every subresource to opt in, buys nothing without SharedArrayBuffer, and fails by silently not loading resources. Adding a header because a scanner named it, at the risk of blanking the app, is how a security pass makes a site worse. |
 | 10015 | Re-examine cache-control | both | **Accepted.** `index.html` is `no-cache` on purpose — it names the current chunk hashes, and caching it causes a 404 storm after every deploy. It holds no user data. |
 | 10049 | Storable and cacheable content | web | **Accepted.** Fingerprinted assets served `immutable` by design. |
 | 10049 | Non-storable content | API | **False positive in context.** An API declining to be cached is correct. |
@@ -292,8 +406,8 @@ while containing nothing.
 | Unit tests | 192 / 192 |
 | Integration tests | 66 / 66 |
 | CSP in a browser | enforces; SPA unaffected |
-| ZAP baseline, web | 0 FAIL / 6 WARN / 61 PASS, every WARN judged |
-| ZAP baseline, API | 0 FAIL / 4 WARN / 63 PASS, every WARN judged |
+| ZAP baseline, web | 0 FAIL / 5 WARN / 62 PASS after fixes (was 6 / 61), every WARN judged |
+| ZAP baseline, API | 0 FAIL / 2 WARN / 65 PASS after fixes (was 4 / 63), every WARN judged |
 | dev deployed | `9a57a6e14264`, headers measured live |
 | prod deployed | `9a57a6e14264` — the same image dev tested, promoted not rebuilt |
 
