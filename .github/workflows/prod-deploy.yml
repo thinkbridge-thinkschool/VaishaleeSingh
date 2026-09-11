@@ -30,6 +30,22 @@ name: prod-deploy
 on:
   push:
     branches: [main]
+    # PATHS, BECAUSE PROD DEPLOYS ARE PROMOTIONS AND DOCS DO NOT BUILD IMAGES.
+    #
+    # Without this, every merge to main runs this workflow, including one that
+    # only edits markdown. The tag check then looks for an image named after a
+    # commit no pipeline built -- correctly does not find one -- and the run
+    # goes red for a change that could not possibly reach production. A red
+    # build that everyone learns to ignore is worse than no build at all, and
+    # this one would have gone red on documentation.
+    #
+    # These are the paths whose changes produce a new image: the two things the
+    # dev workflows build, plus this file. Anything else merged to main is not
+    # something production runs.
+    paths:
+      - 'Day7/piece2/**'
+      - 'Day13/quotes-web/**'
+      - '.github/workflows/prod-deploy.yml'
   workflow_dispatch:
     inputs:
       tag:
@@ -256,27 +272,70 @@ jobs:
       # target port, a failed image pull and an unresolvable Key Vault
       # reference all report success here and then sit in Activating. All three
       # happened on dev.
+      # SCALED-TO-ZERO IS NOT A FAILURE HERE, AND TREATING IT AS ONE FAILED A
+      # DEPLOYMENT THAT HAD ALREADY WORKED.
+      #
+      # This loop waited for `Running` and nothing else. Prod runs with
+      # minReplicas: 0 -- the deliberate choice that keeps it affordable
+      # between exercises -- so with no traffic a perfectly healthy revision
+      # reports `ScaledToZero` forever, and the loop reported:
+      #
+      #   attempt 30: runningState=ScaledToZero
+      #   Error: The new revision did not reach Running within five minutes.
+      #
+      # It had rolled the image successfully one step earlier. The run went red
+      # for the app behaving exactly as configured, which is worse than a
+      # missing check: it teaches whoever sees it that prod deploys are flaky.
+      #
+      # A scaled-to-zero app also cannot be proven healthy by asking Azure --
+      # there is nothing running to ask about. So this step now WAKES it: an
+      # HTTP request is what a real user would do, it is what makes Container
+      # Apps start a replica, and the response is better evidence than any
+      # state field. The smoke test that follows is the actual proof; this step
+      # exists to make sure there is something for it to talk to.
       - name: Wait for the new revision to run
         run: |
           set -euo pipefail
+          fqdn=$(az containerapp show --name "${{ matrix.app }}" \
+            --resource-group "$PROD_RESOURCE_GROUP" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+
           for attempt in $(seq 1 30); do
             state=$(az containerapp revision list \
               --name "${{ matrix.app }}" --resource-group "$PROD_RESOURCE_GROUP" \
               --query "[?properties.active].properties.runningState | [0]" -o tsv)
             echo "attempt $attempt: runningState=$state"
+
             if [ "$state" = "Running" ]; then
               echo "Revision is running."
               exit 0
             fi
+
             if [ "$state" = "Failed" ] || [ "$state" = "Degraded" ]; then
               echo "::error::The new revision reported $state."
               az containerapp logs show --name "${{ matrix.app }}" \
                 --resource-group "$PROD_RESOURCE_GROUP" --type system --tail 50 || true
               exit 1
             fi
+
+            # Scaled to zero: nothing is wrong, there is simply nothing running.
+            # Knock on the door and let the next poll see the replica start.
+            # A cold start here also has to wait for the serverless database to
+            # resume, so the timeout is generous and a non-200 is not yet a
+            # verdict -- the smoke test decides that.
+            if [ "$state" = "ScaledToZero" ] || [ -z "$state" ] || [ "$state" = "None" ]; then
+              code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 "https://$fqdn/" || echo 000)
+              echo "  scaled to zero -- sent a request to wake it: HTTP $code"
+              if [ "$code" != "000" ] && [ "$code" != "504" ]; then
+                echo "The app answered from cold, which is what scale-to-zero looks like when it is working."
+                exit 0
+              fi
+            fi
+
             sleep 10
           done
-          echo "::error::The new revision did not reach Running within five minutes."
+
+          echo "::error::The new revision never answered and never reported Running within five minutes."
           az containerapp logs show --name "${{ matrix.app }}" \
             --resource-group "$PROD_RESOURCE_GROUP" --type system --tail 50 || true
           exit 1
