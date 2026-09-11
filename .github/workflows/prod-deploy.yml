@@ -40,12 +40,19 @@ on:
     # this one would have gone red on documentation.
     #
     # These are the paths whose changes produce a new image: the two things the
-    # dev workflows build, plus this file. Anything else merged to main is not
-    # something production runs.
+    # dev workflows build. Anything else merged to main is not something
+    # production runs.
+    #
+    # THIS FILE IS DELIBERATELY NOT IN THE LIST, which is the opposite of the
+    # usual convention. A workflow normally includes itself so that changing it
+    # exercises it. Here that guarantees a red run: editing only this file
+    # produces a commit no image is built from, so the tag check correctly
+    # refuses to find one and the run fails -- meaning every attempt to IMPROVE
+    # this pipeline would break it. `workflow_dispatch` below is how to
+    # exercise it, passing a tag dev has already built.
     paths:
       - 'Day7/piece2/**'
       - 'Day13/quotes-web/**'
-      - '.github/workflows/prod-deploy.yml'
   workflow_dispatch:
     inputs:
       tag:
