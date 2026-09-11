@@ -75,7 +75,7 @@ and denying everybody is an outage rather than security.
 | STRIDE | Threat | Status |
 |---|---|---|
 | **S** | Connect with a stolen password | **Mitigated by design.** `azureADOnlyAuthentication` — no SQL login exists to hold a password (Day 25). |
-| **I** | Reach the server from the internet | **Improved today, not eliminated.** The server carried `AllowAllWindowsAzureIps` (0.0.0.0–0.0.0.0), whose name misleads: it admits **every Azure tenant's** resources, not just ours. Plus three stale `QueryEditorClientIPAddress_*` rules — operator home addresses left permanently open. All removed; both servers now have exactly one rule, the Container Apps environment's outbound address. |
+| **I** | Reach the server from the internet | **Improved today, not eliminated.** The server carried `AllowAllWindowsAzureIps` (0.0.0.0–0.0.0.0), whose name misleads: it admits **every Azure tenant's** resources, not just ours. Plus three stale `QueryEditorClientIPAddress_*` rules — operator home addresses left permanently open. All removed; both servers now have exactly one rule, the Container Apps environment's outbound address — **which is not a fixed value, and treating it as one caused an outage the same day. See "The fix that broke production" below.** |
 | **I** | Private endpoint instead of a firewall | **Not possible here, measured not assumed.** The environment is Consumption-only with `vnetConfiguration: null`; VNet integration is fixed at environment creation and cannot be added, and the subscription permits exactly one environment (`MaxNumberOfGlobalEnvironmentsInSubExceeded`, Day 24). Accepted risk: SQL is reachable over the public network path, defended by Entra-only auth and one IP rule. |
 | **T** | SQL injection | **Mitigated.** EF Core parameterises; the one raw T-SQL path (`create-sql-user.ps1`) uses `QUOTENAME` rather than concatenation. |
 | **E** | The app's identity can do more than it needs | **Mitigated.** Contained user with `db_datareader`/`db_datawriter`/`db_ddladmin` only — no server-level role. |
@@ -121,6 +121,49 @@ setting needs watching.
 | **I** | Operator IP rules outliving their purpose | **Fixed today.** Four such rules removed. The promotion script adds one per run and does not remove it — see open items. |
 | **E** | An operator's laptop is the SQL administrator | **Accepted.** `quotes-sql-admins` is an Entra group; membership is the control. A group is the right shape (auditable, revocable without touching the server). |
 
+## The fix that broke production
+
+The row above is a real improvement and it is also the most expensive mistake
+in this document, so it is written out rather than quietly amended.
+
+Removing `AllowAllWindowsAzureIps` left one rule naming `20.203.119.48`, read
+off the environment and recorded as though it were a property of it. Hours
+later every container failed to start:
+
+```
+Cannot open server 'sql-quotes-…' requested by the login.
+Client with IP address '20.203.116.141' is not allowed to access the server.
+Number:40615
+```
+
+The address had moved. A Consumption-only Container Apps environment does not
+pin its egress address, and nothing in this project's notes said otherwise —
+nothing said it did, either, which is exactly the gap: an unexamined
+assumption was written down as a fact and then depended on.
+
+**What it looked like while it was happening**, because the shape of the
+failure matters more than the cause: the deployment was green. The revision
+sat in `Activating` with `ContainerBackOff ×21`. The site answered `stream
+timeout`. SQL 40615 reads like a network problem. Nothing anywhere said
+"a firewall rule is stale", and the only place the truth appeared was the
+container's own stdout.
+
+**Prod carried the identical stale rule** and would have failed the same way
+the moment it woke — which, with `minReplicas: 0`, would have been the next
+time anyone opened it.
+
+**The fix is reconciliation, not a better constant.** `Day27/scripts/01-reconcile-sql-firewall.ps1`
+reads the apps' current outbound addresses and makes the firewall match,
+pruning what no longer applies. It is not in the Bicep, because the value only
+exists after the apps do and can change while nothing is deploying. It is not
+in CI, because the pipeline holds no role on the SQL server and widening that
+to save one command is the wrong trade.
+
+**The lesson, stated plainly:** a security change that removes a permission
+should be treated as a change that can take the system down, and verified by
+watching the thing that used that permission actually work — not by observing
+that the deployment went green.
+
 ## Supply chain
 
 `SQLitePCLRaw.lib.e_sqlite3` 2.1.11 carries a known high-severity advisory
@@ -134,6 +177,8 @@ every build for weeks. **Open.**
 
 | Item | Why not done today |
 |---|---|
+| Reconciling the SQL firewall on a schedule | The script exists and is run by hand. Nothing yet notices when the egress address moves — the app crash-looping is still the detector, and it should not be. |
+| Security headers were first shipped to the wrong origin | Corrected the same day: they were added to the API, whose responses are JSON, when the document that executes script is served by nginx. Both origins now set them. Recorded because "we added CSP" was true and useless for most of that day. |
 | Alert on `azureADOnlyAuthentication` changing | Identified while writing this; not yet built. It is the detection that matters most, because prevention rests on one setting. |
 | Private endpoints | Not possible on this subscription. Measured, evidenced above. |
 | Two auth schemes live at once (`CustomJwt` + Entra) | Twice the token-validation surface. Retiring `CustomJwt` means migrating the SPA to MSAL and reworking sign-in, refresh tokens and the `Users` table — its own day, and a decision rather than an oversight (Day 25 said the same). |
