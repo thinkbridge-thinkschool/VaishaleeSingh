@@ -3,7 +3,7 @@ name: prod-deploy
 # Promotes an already-built, already-tested image from the dev registry into
 # production. It does NOT build anything, and that is the whole design.
 #
-# WHY PROMOTION AND NOT A REBUILD. A rebuild on the production branch would
+# WHY PROMOTION AND NOT A REBUILD. A rebuild on the release branch would
 # compile the same source a second time and ship a DIFFERENT binary: a
 # different base image digest, a different SDK patch, different restored
 # package versions. What then reaches production is something no test ever ran
@@ -13,16 +13,23 @@ name: prod-deploy
 # tests passed on.
 #
 # WHY A SEPARATE BRANCH AND NOT A TAG. Two environments, two merges, two audit
-# trails: a merge into `main` deploys dev and a merge into `production` deploys
-# prod, and neither can deploy the other's environment because the OIDC
+# trails: a merge into `dev` deploys dev and a merge into `main` deploys prod,
+# and neither can deploy the other's environment because the OIDC
 # subjects and the role assignments are scoped separately (see
 # Day26/scripts/01-github-oidc.ps1). The reviewer gate is a GitHub Environment
 # rather than a branch rule, so the approval is recorded against the deployment
 # and not only against the commit.
 
+# THE TRIGGER MUST NAME A BRANCH THAT EXISTS. This said `production` until
+# Day 27, and no such branch has ever existed in this repository. The effect
+# was not a failure but a silence: merges to main started nothing, and the
+# Actions tab of a repository whose production deployment never runs looks
+# exactly like one where it always succeeds. The rest of this file was already
+# written for the main-deploys-prod model (see the preflight below, which says
+# so); only this line was left behind.
 on:
   push:
-    branches: [production]
+    branches: [main]
   workflow_dispatch:
     inputs:
       tag:
