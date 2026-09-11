@@ -67,6 +67,20 @@ public class SecurityHeadersMiddleware(RequestDelegate next)
             "frame-ancestors 'none'; " +
             "base-uri 'self'; " +
             "form-action 'self'"),
+
+        // Day 27, from the ZAP baseline:
+        //   WARN-NEW: Cross-Origin-Resource-Policy Header Missing or Invalid
+        //             [90004]
+        // Without it, any other site can embed this API's responses as a
+        // subresource and read what the browser fetched with the user's
+        // cookies. `same-origin` refuses that. It costs nothing here because
+        // the only browser client reaches this API through nginx on its own
+        // origin, so no legitimate cross-origin embedding exists to break.
+        //
+        // Cross-Origin-Embedder-Policy, which ZAP also asks for on the front
+        // end, is deliberately NOT set -- see nginx/security-headers.conf for
+        // the reasoning. It is not a header to add because a scanner named it.
+        ("Cross-Origin-Resource-Policy", "same-origin"),
     ];
 
     public async Task InvokeAsync(HttpContext context)
@@ -86,15 +100,36 @@ public class SecurityHeadersMiddleware(RequestDelegate next)
                     context.Response.Headers[name] = value;
             }
 
-            // HSTS only over HTTPS, and only for real requests.
+            // HSTS only where the BROWSER's connection is HTTPS.
             //
-            // Sending Strict-Transport-Security over plain HTTP is ignored by
-            // browsers, so it is not harmful -- but setting it in local
-            // development IS harmful: the browser then refuses http://localhost
-            // for the max-age, for every app on that port, and the developer
-            // has to clear it by hand. One year, because a short max-age
-            // provides a window rather than protection.
-            if (context.Request.IsHttps)
+            // Setting Strict-Transport-Security in local development is
+            // actively harmful: the browser then refuses http://localhost for
+            // the whole max-age, for every app on that port, and the developer
+            // has to clear it by hand. One year, because a short max-age is a
+            // window rather than protection.
+            //
+            // WHY THIS IS NOT `context.Request.IsHttps`, AND HOW WE FOUND OUT.
+            // It was, and the header never shipped. Azure Container Apps
+            // terminates TLS at its ingress and forwards plain HTTP to the
+            // container, so IsHttps is false on every production request and
+            // the condition was never true in the one place it mattered. The
+            // code read correctly and did nothing -- no test could see it,
+            // because in-process tests speak to Kestrel directly. The OWASP ZAP
+            // baseline against dev is what found it:
+            //
+            //   WARN-NEW: Strict-Transport-Security Header Not Set [10035]
+            //
+            // X-Forwarded-Proto is the ingress's statement about the browser's
+            // side of the connection. It is trusted here for the same reason
+            // the rate limiter trusts X-Forwarded-For: nothing reaches this
+            // container except through that ingress. The consequence of a
+            // wrong answer is also small in this direction -- a spoofed
+            // "https" adds a header a plain-HTTP browser ignores.
+            var forwardedProto = context.Request.Headers["X-Forwarded-Proto"].FirstOrDefault();
+            var clientUsedHttps = context.Request.IsHttps
+                || string.Equals(forwardedProto, "https", StringComparison.OrdinalIgnoreCase);
+
+            if (clientUsedHttps)
                 context.Response.Headers["Strict-Transport-Security"] =
                     "max-age=31536000; includeSubDomains";
 
