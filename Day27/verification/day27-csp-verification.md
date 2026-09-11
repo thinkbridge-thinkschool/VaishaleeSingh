@@ -118,10 +118,25 @@ whose target cannot be identified is not evidence.
 
 ### Results
 
-| Target | FAIL | WARN | PASS |
-|---|---|---|---|
-| `quotes-web-dev` | 0 | 6 | 61 |
-| `quotes-api-dev` (`/health`) | 0 | 4 | 63 |
+Scanned twice: once to find things, once after fixing them.
+
+| Target | before | after |
+|---|---|---|
+| `quotes-web-dev` | 0 FAIL / 6 WARN / 61 PASS | **0 FAIL / 5 WARN / 62 PASS** |
+| `quotes-api-dev` (`/health`) | 0 FAIL / 4 WARN / 63 PASS | **0 FAIL / 2 WARN / 65 PASS** |
+
+Reports: `zap-web-after.html` / `zap-api-after.html` (before the fixes) and
+`zap-web-final.html` / `zap-api-final.html` (after). Both pairs are kept — a
+single "after" report shows a clean scan and proves nothing about whether the
+work changed anything.
+
+Cleared on the rescan: `10035` and `90004` on the API, `10036` on the web.
+
+`90004` still warns on the web, and that was predicted wrongly here: 4 warnings
+were expected, 5 remain. On the front end that rule wants
+Cross-Origin-Embedder-Policy specifically, which is the one header this pass
+refused to set. The warning is the visible shape of a decision rather than an
+oversight — but only because the decision was written down before the scan.
 
 The API was targeted at `/health` because its root is a genuine 404 — the SPA
 does not live there — and ZAP's spider stops on a non-200 seed.
