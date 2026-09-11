@@ -147,7 +147,7 @@ public class CollectionListingQueryCountTests
         var queries = new CollectionQueries(db);
         interceptor.Reset();
 
-        var detail = await queries.GetDetailAsync(firstId);
+        var detail = await queries.GetDetailAsync(firstId, OwnerId);
 
         interceptor.Count.Should().Be(
             1,
@@ -166,6 +166,37 @@ public class CollectionListingQueryCountTests
         detail.Quotes.Should().BeInAscendingOrder(q => q.AddedAt);
     }
 
+    /// <summary>
+    /// Day 27. The ownership rule lives in the QUERY, so it is tested here and
+    /// not only through the endpoint.
+    ///
+    /// The endpoint tests in Quotes.Tests.Integration prove the HTTP behaviour;
+    /// this one proves the property that makes the endpoint safe by
+    /// construction -- that no caller of GetDetailAsync, present or future,
+    /// can obtain another owner's collection even if they forget to check.
+    /// That is the whole reason the filter was moved into the WHERE rather
+    /// than written as an if-statement after the load.
+    /// </summary>
+    [Fact]
+    public async Task Detail_ForAnotherOwner_ReturnsNull()
+    {
+        await using var connection = new SqliteConnection("Filename=:memory:");
+        await connection.OpenAsync();
+        await using var db = CreateContext(connection, interceptor: null);
+        await db.Database.EnsureCreatedAsync();
+        await SeedAsync(db, collections: 1, quotesPerCollection: 2);
+
+        var id = await db.Collections.OrderBy(c => c.Id).Select(c => c.Id).FirstAsync();
+
+        var queries = new CollectionQueries(db);
+
+        var mine = await queries.GetDetailAsync(id, OwnerId);
+        var theirs = await queries.GetDetailAsync(id, "somebody-else");
+
+        mine.Should().NotBeNull("the owner must still be able to read their own collection");
+        theirs.Should().BeNull("the row for another owner's collection must never leave the database");
+    }
+
     [Fact]
     public async Task Detail_UnknownId_ReturnsNull()
     {
@@ -176,7 +207,7 @@ public class CollectionListingQueryCountTests
 
         var queries = new CollectionQueries(db);
 
-        var detail = await queries.GetDetailAsync(9_999);
+        var detail = await queries.GetDetailAsync(9_999, OwnerId);
 
         detail.Should().BeNull("a missing id is an ordinary 404, not an exception");
     }
@@ -238,7 +269,7 @@ public class CollectionListingQueryCountTests
         var queries = new CollectionQueries(db);
         interceptor.Reset();
 
-        await queries.GetDetailAsync(firstId);
+        await queries.GetDetailAsync(firstId, OwnerId);
 
         interceptor.CommandTexts.Should().HaveCount(
             1,

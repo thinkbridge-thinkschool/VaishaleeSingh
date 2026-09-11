@@ -19,12 +19,12 @@ namespace QuotesApi.Extensions;
 public static class CollectionEndpointExtensions
 {
     public static IEndpointRouteBuilder MapCollectionEndpoints(
-        this IEndpointRouteBuilder app)
+        this IEndpointRouteBuilder app, string prefix = "/api")
     {
         // .RequireAuthorization() here means "must be authenticated at
         // all" -- a baseline every route needs. Each route below then adds
         // its own, more specific, scope policy on top of that baseline.
-        var group = app.MapGroup("/api/collections")
+        var group = app.MapGroup($"{prefix}/collections")
             .RequireAuthorization();
 
         // Create a collection. Validation (name length, non-empty) lives
@@ -76,12 +76,7 @@ public static class CollectionEndpointExtensions
             ClaimsPrincipal user,
             CancellationToken cancellationToken) =>
         {
-            var ownerId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value
-                ?? user.FindFirst("sub")?.Value
-                ?? throw new InvalidOperationException(
-                    "Authenticated request had no caller id claim.");
-
-            var collections = await queries.ListByOwnerAsync(ownerId, cancellationToken);
+            var collections = await queries.ListByOwnerAsync(CallerId(user), cancellationToken);
 
             return Results.Ok(collections);
         }).RequireAuthorization("can-read-collections");
@@ -93,13 +88,32 @@ public static class CollectionEndpointExtensions
         // read was serialising a write model: private setters, an Items list
         // of bare QuoteIds the client cannot render, and no quote text at all.
         // Needs the collections.read scope.
+        // OWNERSHIP, AND WHY IT WAS MISSING HERE WHILE PRESENT NEXT DOOR.
+        //
+        // "can-read-collections" answers "may this caller read collections",
+        // which the token knows. It does NOT answer "may this caller read
+        // THIS collection", which only the loaded row knows. The list
+        // endpoint above scopes by owner and the whole-collection delete
+        // below compares OwnerId -- this one did neither, so any
+        // authenticated caller could walk /api/collections/1, /2, /3 and read
+        // every user's collections. Integer ids make that a loop, not an
+        // attack.
         group.MapGet("/{id:int}", async (
             int id,
             ICollectionQueries queries,
+            ClaimsPrincipal user,
             CancellationToken cancellationToken) =>
         {
-            var collection = await queries.GetDetailAsync(id, cancellationToken);
+            var collection = await queries.GetDetailAsync(id, CallerId(user), cancellationToken);
 
+            // 404 HERE, WHERE THE DELETE BELOW RETURNS 403, AND THE DIFFERENCE
+            // IS DELIBERATE. The delete's comment argues that ids are not
+            // secrets, so a caller may know a collection exists and simply be
+            // refused -- fair for an id they supplied and believe is theirs.
+            // A read is the operation an attacker uses to ENUMERATE, and
+            // answering 403 for "exists, not yours" versus 404 for "does not
+            // exist" hands them a map of which ids are real. Same information,
+            // different value to the person asking.
             return collection is null
                 ? Results.NotFound()
                 : Results.Ok(collection);
@@ -115,12 +129,18 @@ public static class CollectionEndpointExtensions
             AddCollectionItemRequest request,
             ICollectionRepository repository,
             IClock clock,
+            ClaimsPrincipal user,
             CancellationToken cancellationToken) =>
         {
             var collection = await repository.GetByIdAsync(id, cancellationToken);
 
             if (collection is null)
                 return Results.NotFound();
+
+            // Writing into a collection the caller does not own. Worse than
+            // the read above, because it changes what somebody else sees.
+            if (collection.OwnerId != CallerId(user))
+                return Results.Forbid();
 
             collection.AddItem(request.QuoteId, clock.UtcNow);
 
@@ -137,12 +157,16 @@ public static class CollectionEndpointExtensions
             int id,
             int quoteId,
             ICollectionRepository repository,
+            ClaimsPrincipal user,
             CancellationToken cancellationToken) =>
         {
             var collection = await repository.GetByIdAsync(id, cancellationToken);
 
             if (collection is null)
                 return Results.NotFound();
+
+            if (collection.OwnerId != CallerId(user))
+                return Results.Forbid();
 
             collection.RemoveItem(quoteId);
 
@@ -172,9 +196,6 @@ public static class CollectionEndpointExtensions
             ClaimsPrincipal user,
             CancellationToken cancellationToken) =>
         {
-            var ownerId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value
-                ?? user.FindFirst("sub")?.Value;
-
             var collection = await repository.GetByIdAsync(id, cancellationToken);
 
             if (collection is null)
@@ -184,7 +205,7 @@ public static class CollectionEndpointExtensions
             // id exists (ids are not secrets), they are just not allowed to
             // delete this one. QuoteEndpointExtensions' delete makes the same
             // choice for the same reason.
-            if (collection.OwnerId != ownerId)
+            if (collection.OwnerId != CallerId(user))
                 return Results.Forbid();
 
             await repository.DeleteAsync(collection, cancellationToken);
@@ -194,6 +215,29 @@ public static class CollectionEndpointExtensions
 
         return app;
     }
+
+    /// <summary>
+    /// The caller's user id, from whichever claim carries it.
+    ///
+    /// ONE HELPER RATHER THAN FIVE COPIES, and the reason is the bug this
+    /// file was just fixed for. The claim lookup was written inline in the
+    /// two endpoints whose author was thinking about ownership, and simply
+    /// absent from the three who were not -- so any authenticated caller
+    /// could read, add to and delete from every other user's collections.
+    /// A rule that must hold on five endpoints and is spelled out on two is
+    /// not a rule; it is a habit.
+    ///
+    /// Throws rather than returning null: every route here sits behind
+    /// .RequireAuthorization(), so a request with no caller id claim is a
+    /// broken authentication pipeline and not a case to handle politely. A
+    /// null here would compare unequal to every OwnerId and quietly deny
+    /// everything, which looks like a permissions bug and hides a real one.
+    /// </summary>
+    private static string CallerId(ClaimsPrincipal user) =>
+        user.FindFirst(ClaimTypes.NameIdentifier)?.Value
+        ?? user.FindFirst("sub")?.Value
+        ?? throw new InvalidOperationException(
+            "Authenticated request had no caller id claim.");
 }
 
 /// <summary>

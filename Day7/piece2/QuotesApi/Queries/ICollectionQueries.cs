@@ -47,9 +47,20 @@ public interface ICollectionQueries
 
     /// <summary>
     /// One collection with its quotes, for the detail screen. One query.
-    /// Returns null when no collection with that id exists.
+    /// Returns null when no collection with that id exists <em>for this
+    /// owner</em>.
+    ///
+    /// OWNERSHIP IS A PARAMETER, NOT THE CALLER'S RESPONSIBILITY. Day 27 found
+    /// that GET /api/collections/{id} had no ownership check at all, so any
+    /// authenticated user could read every other user's collections by walking
+    /// integer ids. The endpoint was fixed -- and the rule was also moved
+    /// HERE, because an endpoint that must remember to filter is the same
+    /// arrangement that produced the bug. With ownerId in the signature this
+    /// query cannot return somebody else's row, whatever a future caller
+    /// forgets.
     /// </summary>
     Task<CollectionDetail?> GetDetailAsync(
         int id,
+        string ownerId,
         CancellationToken cancellationToken = default);
 }
