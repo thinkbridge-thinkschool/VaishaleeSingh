@@ -26,7 +26,10 @@ name: day24-web-deploy
 
 on:
   push:
-    branches: [main]
+    # `dev`, for the same reason as the API workflow: this file builds, and a
+    # freshly built bundle has not been promoted yet. main deploys prod through
+    # prod-deploy.yml, which imports rather than builds.
+    branches: [dev]
     paths:
       - 'Day13/quotes-web/**'
       - '.github/workflows/day24-web-deploy.yml'
@@ -35,11 +38,11 @@ on:
 concurrency:
   # Same rule as the API workflow, and for the same reason. Grouped by PR number
   # for pull-request runs so a re-push replaces only that PR's in-flight run;
-  # cancel-in-progress OFF for main, because a cancelled production deploy
-  # leaves the live site on the previous commit with nothing red to show it.
+  # cancel-in-progress OFF for dev, because a cancelled deploy leaves the
+  # site on the previous commit with nothing red to show it.
   # day17-swa-deploy.yml lost a deploy to exactly that.
   group: web-deploy-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/dev' }}
 
 # OIDC, not a stored service-principal secret. AZURE_CLIENT_ID / TENANT_ID /
 # SUBSCRIPTION_ID are identifiers, not credentials.

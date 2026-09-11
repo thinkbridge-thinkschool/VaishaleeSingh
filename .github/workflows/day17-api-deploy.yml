@@ -16,11 +16,14 @@ name: day17-api-deploy
 
 on:
   push:
-    # main only, and main means DEV. Production rolls from the `production`
-    # branch through prod-deploy.yml, which promotes an image this workflow
-    # already built rather than building its own -- so this file's job ends at
-    # dev, and nothing here can reach prod.
-    branches: [main]
+    # `dev` only, and that is the safety property rather than a preference.
+    # This workflow BUILDS: what it produces has not been promoted or run
+    # anywhere yet, so it is exactly the pipeline that must not be able to
+    # reach production. main deploys prod through prod-deploy.yml, which
+    # promotes an image this workflow already built AND dev already ran -- it
+    # never compiles. The separation therefore holds by construction, not by
+    # anyone remembering which branch is which.
+    branches: [dev]
     paths:
       # The whole of Day7/piece2, not just QuotesApi/. The test projects are
       # this workflow's gate, so a change to them changes what the gate means
@@ -42,13 +45,13 @@ concurrency:
   # two `containerapp update` calls interleaving can leave the app pointing at
   # the older of the two images.
   # Grouped by PR number for pull-request runs so a re-push replaces only that
-  # PR's own in-flight run, and cancel-in-progress is off for main: a rollout
+  # PR's own in-flight run, and cancel-in-progress is off for dev: a rollout
   # should queue behind the previous one, not cancel it. The SWA workflow lost
   # a deploy to exactly that -- the run for a merge commit on main was
   # cancelled by a later request for the same group, so the live site stayed on
   # the previous commit with nothing red to show it.
   group: api-deploy-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/dev' }}
 
 # Day 24: every one of these was a literal naming a resource in subscription
 # 80d20ef9-8bfa-45d7-a9d8-b6cf1f0c791e, whose credits are exhausted. They are
