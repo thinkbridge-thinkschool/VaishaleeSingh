@@ -3,7 +3,8 @@ env:
   - excludePaths: []
     name: baseline
     urls:
-    - https://quotes-web-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io
+    - https://quotes-api-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io/health
+    - https://quotes-api-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io/
   parameters:
     failOnError: true
     progressToStdout: false
@@ -14,7 +15,7 @@ jobs:
   type: passiveScan-config
 - parameters:
     maxDuration: 1
-    url: https://quotes-web-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io
+    url: https://quotes-api-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io/
   type: spider
 - parameters:
     maxDuration: 0
@@ -27,7 +28,7 @@ jobs:
 - parameters:
     reportDescription: ''
     reportDir: /zap/wrk/
-    reportFile: zap-web-after.html
+    reportFile: zap-api-final.html
     reportTitle: ZAP Scanning Report
     template: traditional-html
   type: report
