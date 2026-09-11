@@ -18,6 +18,15 @@ server {
     # below that declare add_header of their own.
     include /etc/nginx/security-headers.conf;
 
+    # Day 27, from the ZAP baseline:
+    #   WARN-NEW: Server Leaks Version Information via "Server" HTTP Response
+    #             Header Field [10036]
+    # nginx announces its exact version on every response, which tells an
+    # attacker which CVEs to try before they try anything. Off does not hide
+    # that this is nginx -- it stops naming the patch level. Cheap, and there
+    # is no reason a browser needs it.
+    server_tokens off;
+
     # --- the API, proxied ---------------------------------------------------
     # This block is what replaces the Static Web App's linked backend, and it is
     # why Day13/quotes-web/src/environments/environment.production.ts needs no
