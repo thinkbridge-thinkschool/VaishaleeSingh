@@ -130,23 +130,46 @@ jobs:
       #
       # This still FAILS rather than skipping. main deploys production; if it
       # did not, that is a red build and not a quiet no-op.
+      # WHY THIS NO LONGER ASKS `az group exists`, AND WHY THAT MATTERED.
+      #
+      # It did, and it produced this on a resource group that was demonstrably
+      # there -- an operator had updated its SQL firewall minutes earlier:
+      #
+      #   Resource group thinkschool-prod-rg does not exist, so there is no
+      #   production to deploy to.
+      #
+      # `az group exists` needs read ON THE RESOURCE GROUP. This pipeline is
+      # deliberately granted roles on RESOURCES -- the registry and the two
+      # container apps -- and never on the group, because Day 25 spent a day
+      # establishing that and a Reader on the group would quietly undo it. ARM
+      # answers 404 for what a caller cannot read, `az group exists` turns that
+      # into `false`, and the check then reported an absence that was really a
+      # permission it was never supposed to have.
+      #
+      # So the check now asks about the things it is about to touch, which is
+      # both answerable with the roles it holds AND a stricter question: a
+      # resource group can exist with nothing in it, and this step is meant to
+      # establish that there is a production to deploy to.
       - name: Confirm the prod environment exists
         run: |
           set -euo pipefail
-          if ! az group exists -n "$PROD_RESOURCE_GROUP" | grep -qi true; then
-            echo "::error::Resource group $PROD_RESOURCE_GROUP does not exist, so there is no production to deploy to."
-            echo "::error::Prod is torn down between exercises. Stand it up with:"
-            echo "::error::  ./Day24/scripts/05-promote-prod.ps1 -IAcceptTheCost"
-            echo "::error::Until then every merge to main will fail here, which is correct: main deploys production."
+          missing=""
+          az acr show --name "${PROD_REGISTRY%%.*}" -o none 2>/dev/null || missing="registry ${PROD_REGISTRY%%.*}"
+          az containerapp show --name "${{ matrix.app }}" --resource-group "$PROD_RESOURCE_GROUP" -o none 2>/dev/null \
+            || missing="${missing:+$missing and }container app ${{ matrix.app }}"
+
+          if [ -n "$missing" ]; then
+            echo "::error::Cannot see $missing, so there is nothing in production to deploy to."
+            echo "::error::TWO CAUSES LOOK IDENTICAL HERE, because ARM returns 404 for anything this principal cannot read."
+            echo "::error::  1. Prod is torn down. It is, between exercises. Stand it up with:"
+            echo "::error::       ./Day24/scripts/05-promote-prod.ps1 -IAcceptTheCost"
+            echo "::error::  2. Prod exists but this pipeline holds no role on it. That happens after a prod rebuild,"
+            echo "::error::     because role assignments die with the resources they were scoped to. Re-grant with:"
+            echo "::error::       ./Day26/scripts/01-github-oidc.ps1 -ProdRegistry <name of the prod registry>"
+            echo "::error::Tell them apart from a machine that CAN read the group: az group exists -n $PROD_RESOURCE_GROUP"
             exit 1
           fi
-          if ! az acr show --name "${PROD_REGISTRY%%.*}" -o none 2>/dev/null; then
-            echo "::error::The resource group exists but registry ${PROD_REGISTRY%%.*} is not visible."
-            echo "::error::Either the prod stack is mid-create or mid-delete, or this principal lost its Reader role on it."
-            echo "::error::Check: az stack sub show --name quotes-prod --query provisioningState"
-            exit 1
-          fi
-          echo "Prod exists: $PROD_RESOURCE_GROUP / ${PROD_REGISTRY%%.*}"
+          echo "Prod exists and is visible: ${PROD_REGISTRY%%.*} / ${{ matrix.app }}"
 
       # WHICH TAG, AND WHY IT IS NOT THE COMMIT SHA.
       #
