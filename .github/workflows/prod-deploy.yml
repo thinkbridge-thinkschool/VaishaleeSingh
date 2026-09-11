@@ -12,28 +12,17 @@ name: prod-deploy
 # without a pull or a push, so the image running in prod is the image the
 # tests passed on.
 #
-# WHY A BRANCH AND NOT A TAG. Two environments, two merges, two audit trails:
-# a merge into `dev` deploys dev and a merge into `main` deploys prod, and
-# neither can deploy the other's environment because the OIDC subjects and the
-# role assignments are scoped separately (see Day26/scripts/01-github-oidc.ps1).
-# The reviewer gate is a GitHub Environment rather than a branch rule, so the
-# approval is recorded against the deployment and not only against the commit.
-#
-# WHAT THIS PROMOTES IS WHAT DEV IS RUNNING, NOT NECESSARILY THIS COMMIT. Each
-# app's tag is read off its dev counterpart, because that is the only artefact
-# that has actually been exercised. The consequence is worth stating rather
-# than discovering: if main is advanced with something dev has not deployed,
-# this promotes dev's current image and not the merge commit. The resolve step
-# prints the tag it chose and where it came from, and the ordinary flow is to
-# let dev deploy first and merge afterwards.
+# WHY A SEPARATE BRANCH AND NOT A TAG. Two environments, two merges, two audit
+# trails: a merge into `main` deploys dev and a merge into `production` deploys
+# prod, and neither can deploy the other's environment because the OIDC
+# subjects and the role assignments are scoped separately (see
+# Day26/scripts/01-github-oidc.ps1). The reviewer gate is a GitHub Environment
+# rather than a branch rule, so the approval is recorded against the deployment
+# and not only against the commit.
 
 on:
   push:
-    # main IS production. The trunk is what is live: a change reaches dev by
-    # merging to `dev`, and reaches production by merging dev into main. The
-    # branch a person is on then tells them which environment they are about
-    # to affect, which is the property a naming convention alone never gives.
-    branches: [main]
+    branches: [production]
   workflow_dispatch:
     inputs:
       tag:
@@ -119,6 +108,38 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # DOES PROD EXIST AT ALL? Asked first, because prod here is deliberately
+      # torn down between exercises and the failure otherwise arrives four
+      # steps later wearing the wrong face:
+      #
+      #   ERROR: The resource with name 'crwhppc...' and type
+      #   'Microsoft.ContainerRegistry/registries' could not be found in
+      #   subscription 'Azure for Students'.
+      #
+      # ARM answers 404 for anything the caller cannot read, so "the registry
+      # is gone" and "the pipeline lost its permissions" produce the same
+      # sentence -- and the second one is where a reader starts looking.
+      #
+      # This still FAILS rather than skipping. main deploys production; if it
+      # did not, that is a red build and not a quiet no-op.
+      - name: Confirm the prod environment exists
+        run: |
+          set -euo pipefail
+          if ! az group exists -n "$PROD_RESOURCE_GROUP" | grep -qi true; then
+            echo "::error::Resource group $PROD_RESOURCE_GROUP does not exist, so there is no production to deploy to."
+            echo "::error::Prod is torn down between exercises. Stand it up with:"
+            echo "::error::  ./Day24/scripts/05-promote-prod.ps1 -IAcceptTheCost"
+            echo "::error::Until then every merge to main will fail here, which is correct: main deploys production."
+            exit 1
+          fi
+          if ! az acr show --name "${PROD_REGISTRY%%.*}" -o none 2>/dev/null; then
+            echo "::error::The resource group exists but registry ${PROD_REGISTRY%%.*} is not visible."
+            echo "::error::Either the prod stack is mid-create or mid-delete, or this principal lost its Reader role on it."
+            echo "::error::Check: az stack sub show --name quotes-prod --query provisioningState"
+            exit 1
+          fi
+          echo "Prod exists: $PROD_RESOURCE_GROUP / ${PROD_REGISTRY%%.*}"
 
       # WHICH TAG, AND WHY IT IS NOT THE COMMIT SHA.
       #
