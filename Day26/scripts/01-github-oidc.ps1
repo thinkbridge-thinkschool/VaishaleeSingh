@@ -301,19 +301,50 @@ $principalId = $spRecord.id
 
 function Grant {
     param([string] $Role, [string] $Scope, [string] $What)
+    # $Role is either a built-in display name or a full role definition id, so
+    # the idempotency check has to match on both -- otherwise a re-run tries to
+    # create an assignment that already exists and reports a failure for it.
     $have = Invoke-AzJson @('role', 'assignment', 'list', '--assignee', $principalId, '--scope', $Scope, '-o', 'json')
-    if ($null -ne $have -and @($have | Where-Object { $_.roleDefinitionName -eq $Role }).Count -gt 0) {
+    if ($null -ne $have -and @($have | Where-Object {
+            $_.roleDefinitionName -eq $Role -or $_.roleDefinitionId -eq $Role
+        }).Count -gt 0) {
         Ok "$Role already granted on $What"
         return
     }
     if (-not $PSCmdlet.ShouldProcess($What, "grant $Role")) { return }
+
+    # AZ'S OWN MESSAGE, NOT MINE. This used to swallow stderr and print
+    # "failed (needs Owner or User Access Administrator)" for every cause,
+    # which is a guess wearing the clothes of a diagnosis: the same line
+    # appeared for a missing permission, a role definition that had not
+    # finished propagating, and a malformed scope. A handler that hides the
+    # reason costs more than the error it is tidying away.
+    #
+    # It also RETRIES, because one cause here is genuinely transient: a
+    # freshly created custom role is not immediately assignable, and Azure
+    # rejects the assignment until the definition has replicated.
     $previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
+    $out = ''
     try {
-        $null = & az role assignment create --role $Role --assignee-object-id $principalId `
-                    --assignee-principal-type ServicePrincipal --scope $Scope -o none 2>$null
+        foreach ($attempt in 1..5) {
+            $out = (& az role assignment create --role $Role --assignee-object-id $principalId `
+                        --assignee-principal-type ServicePrincipal --scope $Scope -o none 2>&1 | Out-String).Trim()
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($attempt -lt 5) {
+                Note "  grant attempt $attempt failed; retrying in 15s (a new role definition takes time to replicate)"
+                Start-Sleep -Seconds 15
+            }
+        }
     } finally { $ErrorActionPreference = $previous }
-    if ($LASTEXITCODE -ne 0) { Die "Granting $Role on $What failed (needs Owner or User Access Administrator)." }
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ''
+        foreach ($line in ($out -split "`n" | Where-Object { $_.Trim() -ne '' } | Select-Object -First 8)) {
+            Note "  $($line.Trim())"
+        }
+        Die "Granting $Role on $What failed. az's message is above."
+    }
     Ok "$Role granted on $What"
 }
 
@@ -373,6 +404,81 @@ if ([string]::IsNullOrWhiteSpace($ProdRegistry)) {
     $prodAcrScope = "/subscriptions/$SubscriptionId/resourceGroups/$ProdResourceGroup/providers/Microsoft.ContainerRegistry/registries/$ProdRegistry"
     Grant -Role 'AcrPush' -Scope $prodAcrScope -What "PROD registry $ProdRegistry"
     Grant -Role 'Reader'  -Scope $prodAcrScope -What "PROD registry $ProdRegistry (management-plane read)"
+
+    # ACRPUSH DOES NOT INCLUDE IMPORT, AND THAT IS NOT A DETAIL.
+    #
+    # `az acr import` copies a manifest server-side, which is a CONTROL-plane
+    # operation: Microsoft.ContainerRegistry/registries/importImage/action.
+    # AcrPush is data-plane -- pull and push -- so a principal that can push
+    # every image in the registry still cannot import one:
+    #
+    #   (AuthorizationFailed) ... does not have authorization to perform action
+    #   'Microsoft.ContainerRegistry/registries/importImage/action'
+    #
+    # This is the second time this registry's roles have split along that line:
+    # AcrPush also lacks the ARM read that `az acr login` needs, which is why
+    # Reader is granted above. Data-plane and control-plane permissions on ACR
+    # are simply different sets, and "it can push, so surely it can import" is
+    # the assumption to stop making.
+    #
+    # A CUSTOM ROLE RATHER THAN CONTRIBUTOR. Contributor on the registry would
+    # fix this in one line and would also let the pipeline delete the registry,
+    # change its network rules and re-enable the admin account that Day 25
+    # turned off. One action is what is needed, so one action is what is
+    # granted.
+    $importRoleName = 'ACR Image Importer (quotes)'
+    $existingRole = Invoke-AzJson @('role', 'definition', 'list', '--name', $importRoleName, '-o', 'json')
+
+    if ($null -eq $existingRole -or @($existingRole).Count -eq 0) {
+        if ($PSCmdlet.ShouldProcess($importRoleName, 'create the custom role definition')) {
+            $roleDef = @{
+                Name             = $importRoleName
+                Description      = 'Import an image into a container registry. Nothing else.'
+                Actions          = @(
+                    'Microsoft.ContainerRegistry/registries/importImage/action',
+                    'Microsoft.ContainerRegistry/registries/read'
+                )
+                AssignableScopes = @("/subscriptions/$SubscriptionId")
+            }
+            # Through a file. PowerShell strips double quotes on the way to a
+            # native command, and this body is nothing but quoted JSON.
+            $roleFile = Join-Path ([System.IO.Path]::GetTempPath()) ("role-" + [Guid]::NewGuid().ToString('N') + '.json')
+            try {
+                ($roleDef | ConvertTo-Json -Depth 5) | Out-File $roleFile -Encoding utf8
+                $null = & az role definition create --role-definition "@$roleFile" -o none 2>$null
+                if ($LASTEXITCODE -ne 0) {
+                    Note "Could not create the custom role '$importRoleName' (needs Owner or User Access Administrator)."
+                    Note 'Without it the promotion fails at the import step. The alternative, if you'
+                    Note 'cannot create custom roles, is Contributor scoped to this registry alone:'
+                    Note "  az role assignment create --role Contributor --assignee-object-id $principalId --assignee-principal-type ServicePrincipal --scope $prodAcrScope"
+                } else {
+                    Ok "Created custom role: $importRoleName"
+                    # Role definitions are not immediately assignable.
+                    Start-Sleep -Seconds 20
+                }
+            } finally { if (Test-Path $roleFile) { Remove-Item $roleFile -Force -ErrorAction SilentlyContinue } }
+        }
+    } else {
+        Ok "Custom role exists: $importRoleName"
+    }
+
+    # ASSIGNED BY DEFINITION ID, NOT BY NAME. `az role assignment create --role`
+    # resolves a built-in role's display name reliably and a CUSTOM role's
+    # unreliably: with the role plainly present in
+    # `az role definition list --custom-role-only true`, the create still
+    # answered
+    #
+    #   Role 'ACR Image Importer (quotes)' doesn't exist.
+    #
+    # which reads as "the role was never created" and sent me looking at
+    # replication delays and at whether the create had silently failed. It was
+    # neither. The full definition id resolves first time.
+    $importRoleId = (Invoke-AzText @('role', 'definition', 'list', '--name', $importRoleName,
+                                     '--query', '[0].id', '-o', 'tsv')).Text.Trim()
+    if ([string]::IsNullOrWhiteSpace($importRoleId)) {
+        Die "The custom role '$importRoleName' has no definition id. Check: az role definition list --custom-role-only true -o table"
+    }
+    Grant -Role $importRoleId -Scope $prodAcrScope -What "PROD registry $ProdRegistry (importImage)"
 
     foreach ($appName in $ProdContainerApps) {
         $scope = "/subscriptions/$SubscriptionId/resourceGroups/$ProdResourceGroup/providers/Microsoft.App/containerApps/$appName"
