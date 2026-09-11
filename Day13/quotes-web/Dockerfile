@@ -46,6 +46,14 @@ FROM nginx:1.27-alpine
 # image -- the same image can be pointed at dev or prod.
 COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template
 
+# Day 27. The security headers are a plain include, NOT a template: they
+# contain no environment variables, and anything placed in
+# /etc/nginx/templates is rendered through envsubst and written to conf.d as
+# a server-level config of its own -- which for a file of bare add_header
+# directives would fail to load nginx entirely. It goes straight to its final
+# path and is pulled in by include.
+COPY nginx/security-headers.conf /etc/nginx/security-headers.conf
+
 # ng build writes to dist/quotes-web/browser. Asserted rather than assumed: if
 # angular.json ever moves the output, the image would otherwise build clean and
 # serve an empty directory.
