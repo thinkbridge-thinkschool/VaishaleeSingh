@@ -57,12 +57,20 @@ param resourceGroupName = 'thinkschool-prod-rg'
 param apiContainerAppName = 'quotes-api-prod'
 
 // FALSE here, unlike dev, and not by oversight: prod has never been deployed,
-// so there is no container app whose running image could be read. It must be
-// flipped to true immediately after the first successful deployment, or the
-// next infrastructure-only stack update reverts the API to the aci-helloworld
-// placeholder. See the long note on this parameter in main.dev.bicepparam,
-// which is written from having had it happen.
-param quotesApiExists = false
+// so there was no container app whose running image could be read.
+//
+// FLIPPED TO TRUE, WHICH IS THE STEP THAT GETS FORGOTTEN. The first prod
+// deployment is done and quotes-api-prod is running a promoted image. From
+// here the template must READ that image rather than supply one: with false,
+// the next infrastructure-only stack update -- an alert threshold, a log
+// retention change, anything -- resolves the image to
+// mcr.microsoft.com/azuredocs/aci-helloworld and silently reverts production
+// to Microsoft's sample app. The deployment reports success while doing it.
+//
+// It already half-happened here: the first prod create left a placeholder
+// revision active alongside the real one. main.dev.bicepparam carries the
+// long version of this note, written from having had it happen there.
+param quotesApiExists = true
 
 // REPLACE BEFORE DEPLOYING. See the corresponding note in main.dev.bicepparam:
 // the region probe that briefly justified 'centralindia' here was invalid, and
@@ -414,6 +422,10 @@ param serviceBusLockDuration = 'PT1M'
 // header of modules/web.bicep for why this is not a Static Web App and not
 // bundled into the API image.
 param webContainerAppName = 'quotes-web-prod'
-param webAppExists = false
+
+// True for the same reason as quotesApiExists above: quotes-web-prod exists
+// and runs a promoted image, so the template reads it instead of overwriting
+// it with the placeholder on the next infra-only update.
+param webAppExists = true
 param webMinReplicas = 0
 param webMaxReplicas = 2
