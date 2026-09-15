@@ -30,14 +30,6 @@
         [options]="collectionOptions()"
       />
     }
-    <!--
-      A submit button inside the form, hidden from view: it is what makes Enter
-      submit the form, which the footer's button (outside the <form>, in the
-      modal's footer slot) cannot do.
-    -->
-    <button type="submit" class="u-visually-hidden" [attr.aria-hidden]="true" tabindex="-1">
-      {{ quote() ? 'Update quote' : 'Save quote' }}
-    </button>
   </form>
 
   <ng-container ngProjectAs="[modalFooter]">
