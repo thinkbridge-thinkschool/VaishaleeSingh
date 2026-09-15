@@ -21,7 +21,8 @@ public sealed class CatalogDesignTimeDbContextFactory : IDesignTimeDbContextFact
         var optionsBuilder = new DbContextOptionsBuilder<CatalogDbContext>();
 
         optionsBuilder.UseSqlServer(
-            "Server=(local);Database=QuotesPlatform.DesignTime;Trusted_Connection=True;TrustServerCertificate=True;");
+            "Server=(local);Database=QuotesPlatform.DesignTime;Trusted_Connection=True;TrustServerCertificate=True;",
+            sql => sql.MigrationsHistoryTable("__EFMigrationsHistory", CatalogDbContext.Schema));
 
         return new CatalogDbContext(optionsBuilder.Options);
     }

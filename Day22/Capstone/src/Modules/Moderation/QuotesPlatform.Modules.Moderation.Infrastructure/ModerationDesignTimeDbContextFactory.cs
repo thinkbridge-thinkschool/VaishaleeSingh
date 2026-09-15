@@ -21,7 +21,8 @@ public sealed class ModerationDesignTimeDbContextFactory : IDesignTimeDbContextF
         var optionsBuilder = new DbContextOptionsBuilder<ModerationDbContext>();
 
         optionsBuilder.UseSqlServer(
-            "Server=(local);Database=QuotesPlatform.DesignTime;Trusted_Connection=True;TrustServerCertificate=True;");
+            "Server=(local);Database=QuotesPlatform.DesignTime;Trusted_Connection=True;TrustServerCertificate=True;",
+            sql => sql.MigrationsHistoryTable("__EFMigrationsHistory", ModerationDbContext.Schema));
 
         return new ModerationDbContext(optionsBuilder.Options);
     }

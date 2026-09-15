@@ -21,7 +21,8 @@ public sealed class PublishingDesignTimeDbContextFactory : IDesignTimeDbContextF
         var optionsBuilder = new DbContextOptionsBuilder<PublishingDbContext>();
 
         optionsBuilder.UseSqlServer(
-            "Server=(local);Database=QuotesPlatform.DesignTime;Trusted_Connection=True;TrustServerCertificate=True;");
+            "Server=(local);Database=QuotesPlatform.DesignTime;Trusted_Connection=True;TrustServerCertificate=True;",
+            sql => sql.MigrationsHistoryTable("__EFMigrationsHistory", PublishingDbContext.Schema));
 
         return new PublishingDbContext(optionsBuilder.Options);
     }

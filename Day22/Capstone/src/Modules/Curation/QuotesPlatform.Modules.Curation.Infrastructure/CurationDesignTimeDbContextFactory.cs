@@ -21,7 +21,8 @@ public sealed class CurationDesignTimeDbContextFactory : IDesignTimeDbContextFac
         var optionsBuilder = new DbContextOptionsBuilder<CurationDbContext>();
 
         optionsBuilder.UseSqlServer(
-            "Server=(local);Database=QuotesPlatform.DesignTime;Trusted_Connection=True;TrustServerCertificate=True;");
+            "Server=(local);Database=QuotesPlatform.DesignTime;Trusted_Connection=True;TrustServerCertificate=True;",
+            sql => sql.MigrationsHistoryTable("__EFMigrationsHistory", CurationDbContext.Schema));
 
         return new CurationDbContext(optionsBuilder.Options);
     }
