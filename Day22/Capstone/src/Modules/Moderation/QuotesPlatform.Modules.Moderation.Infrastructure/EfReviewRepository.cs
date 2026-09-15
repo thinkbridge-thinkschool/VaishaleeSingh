@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using QuotesPlatform.Modules.Moderation.Application;
 using QuotesPlatform.Modules.Moderation.Domain;
 
@@ -12,6 +13,13 @@ public sealed class EfReviewRepository(ModerationDbContext db) : IReviewReposito
 {
     public Task<Review?> GetAsync(Guid id, CancellationToken cancellationToken = default) =>
         db.Reviews.FindAsync([id], cancellationToken).AsTask();
+
+    public Task<Review?> GetPendingBySubjectAsync(
+        ReviewSubject subject, Guid subjectId, CancellationToken cancellationToken = default) =>
+        db.Reviews
+            .Where(r => r.Subject == subject && r.SubjectId == subjectId && r.Outcome == ReviewOutcome.Pending)
+            .OrderByDescending(r => r.OpenedAt)
+            .FirstOrDefaultAsync(cancellationToken);
 
     public Task AddAsync(Review aggregate, CancellationToken cancellationToken = default)
     {

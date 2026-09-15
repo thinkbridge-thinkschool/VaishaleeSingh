@@ -32,8 +32,8 @@ public static class ModerationModuleRegistration
         services.AddHostedService<ModerationOutboxRelayService>();
         services.AddHostedService<ModerationServiceBusConsumerHost>();
 
-        // Use-case handlers are registered here, keyed by integration event
-        // type, as they are written (Day 29, commit 10 onward).
+        services.AddKeyedScoped<IIntegrationEventHandler, CollectionSubmittedForPublicationHandler>(
+            nameof(CollectionSubmittedForPublication));
 
         return services;
     }
