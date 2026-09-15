@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using QuotesPlatform.Modules.Curation.Domain;
+using QuotesPlatform.SharedKernel;
 
 namespace QuotesPlatform.Modules.Curation.Infrastructure;
 
@@ -22,6 +23,9 @@ public sealed class CurationDbContext(DbContextOptions<CurationDbContext> option
     public const string Schema = "curation";
 
     public DbSet<Collection> Collections => Set<Collection>();
+
+    /// <summary>Written in the same transaction as a Collection change -- see EfOutboxIntegrationEventPublisher.</summary>
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

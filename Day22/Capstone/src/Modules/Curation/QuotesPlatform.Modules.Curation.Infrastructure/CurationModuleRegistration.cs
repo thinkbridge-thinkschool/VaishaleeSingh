@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using QuotesPlatform.Contracts;
 using QuotesPlatform.Modules.Curation.Application;
 
 namespace QuotesPlatform.Modules.Curation.Infrastructure;
@@ -21,9 +22,10 @@ public static class CurationModuleRegistration
         services.AddDbContext<CurationDbContext>(options => options.UseSqlServer(connectionString));
 
         services.AddScoped<ICollectionRepository, EfCollectionRepository>();
+        services.AddScoped<IIntegrationEventPublisher, EfOutboxIntegrationEventPublisher>();
 
-        // Use-case handlers and the outbox/messaging pieces are registered
-        // here as they are written (Day 29, commits 5 onward).
+        // Use-case handlers and the relay/consumer messaging pieces are
+        // registered here as they are written (Day 29, commits 6 onward).
 
         return services;
     }

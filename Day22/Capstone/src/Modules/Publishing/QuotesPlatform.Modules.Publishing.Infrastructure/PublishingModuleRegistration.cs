@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using QuotesPlatform.Contracts;
 using QuotesPlatform.Modules.Publishing.Application;
 
 namespace QuotesPlatform.Modules.Publishing.Infrastructure;
@@ -21,9 +22,10 @@ public static class PublishingModuleRegistration
         services.AddDbContext<PublishingDbContext>(options => options.UseSqlServer(connectionString));
 
         services.AddScoped<IEditionRepository, EfEditionRepository>();
+        services.AddScoped<IIntegrationEventPublisher, EfOutboxIntegrationEventPublisher>();
 
-        // Use-case handlers and the outbox/messaging pieces are registered
-        // here as they are written (Day 29, commits 5 onward).
+        // Use-case handlers and the relay/consumer messaging pieces are
+        // registered here as they are written (Day 29, commits 6 onward).
 
         return services;
     }

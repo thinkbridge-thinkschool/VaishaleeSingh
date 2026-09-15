@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using QuotesPlatform.Modules.Moderation.Domain;
+using QuotesPlatform.SharedKernel;
 
 namespace QuotesPlatform.Modules.Moderation.Infrastructure;
 
@@ -22,6 +23,9 @@ public sealed class ModerationDbContext(DbContextOptions<ModerationDbContext> op
     public const string Schema = "moderation";
 
     public DbSet<Review> Reviews => Set<Review>();
+
+    /// <summary>Written in the same transaction as a Review change -- see EfOutboxIntegrationEventPublisher.</summary>
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

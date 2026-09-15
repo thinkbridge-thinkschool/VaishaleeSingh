@@ -3,63 +3,59 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
-using QuotesPlatform.Modules.Publishing.Infrastructure;
+using QuotesPlatform.Modules.Catalog.Infrastructure;
 
 #nullable disable
 
-namespace QuotesPlatform.Modules.Publishing.Infrastructure.Migrations
+namespace QuotesPlatform.Modules.Catalog.Infrastructure.Migrations
 {
-    [DbContext(typeof(PublishingDbContext))]
-    partial class PublishingDbContextModelSnapshot : ModelSnapshot
+    [DbContext(typeof(CatalogDbContext))]
+    [Migration("20260915105453_AddOutbox")]
+    partial class AddOutbox
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasDefaultSchema("publishing")
+                .HasDefaultSchema("catalog")
                 .HasAnnotation("ProductVersion", "10.0.10")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
-            modelBuilder.Entity("QuotesPlatform.Modules.Publishing.Domain.Edition", b =>
+            modelBuilder.Entity("QuotesPlatform.Modules.Catalog.Domain.Quote", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<Guid>("CollectionId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<int>("EditionNumber")
-                        .HasColumnType("int");
-
-                    b.Property<string>("Name")
+                    b.Property<string>("Author")
                         .IsRequired()
-                        .HasMaxLength(80)
-                        .HasColumnType("nvarchar(80)");
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
 
-                    b.Property<string>("OwnerId")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<DateTimeOffset>("PublishedAt")
+                    b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetimeoffset");
 
-                    b.Property<string>("Slug")
+                    b.Property<bool>("IsPublishable")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("SubmittedByUserId")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("Text")
                         .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("nvarchar(120)");
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Slug");
+                    b.HasIndex("IsPublishable");
 
-                    b.HasIndex("CollectionId", "EditionNumber")
-                        .IsUnique();
-
-                    b.ToTable("Editions", "publishing");
+                    b.ToTable("Quotes", "catalog");
                 });
 
             modelBuilder.Entity("QuotesPlatform.SharedKernel.OutboxMessage", b =>
@@ -117,41 +113,7 @@ namespace QuotesPlatform.Modules.Publishing.Infrastructure.Migrations
 
                     b.HasIndex("Status", "LockedUntilUtc");
 
-                    b.ToTable("OutboxMessages", "publishing");
-                });
-
-            modelBuilder.Entity("QuotesPlatform.Modules.Publishing.Domain.Edition", b =>
-                {
-                    b.OwnsMany("QuotesPlatform.Modules.Publishing.Domain.EditionItem", "Items", b1 =>
-                        {
-                            b1.Property<Guid>("EditionId")
-                                .HasColumnType("uniqueidentifier");
-
-                            b1.Property<int>("Position")
-                                .HasColumnType("int");
-
-                            b1.Property<string>("Author")
-                                .IsRequired()
-                                .HasMaxLength(200)
-                                .HasColumnType("nvarchar(200)");
-
-                            b1.Property<Guid>("QuoteId")
-                                .HasColumnType("uniqueidentifier");
-
-                            b1.Property<string>("Text")
-                                .IsRequired()
-                                .HasMaxLength(1000)
-                                .HasColumnType("nvarchar(1000)");
-
-                            b1.HasKey("EditionId", "Position");
-
-                            b1.ToTable("EditionItems", "publishing");
-
-                            b1.WithOwner()
-                                .HasForeignKey("EditionId");
-                        });
-
-                    b.Navigation("Items");
+                    b.ToTable("OutboxMessages", "catalog");
                 });
 #pragma warning restore 612, 618
         }

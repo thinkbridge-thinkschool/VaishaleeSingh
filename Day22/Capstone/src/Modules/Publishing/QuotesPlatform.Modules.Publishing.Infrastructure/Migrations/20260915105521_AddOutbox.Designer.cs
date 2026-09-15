@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using QuotesPlatform.Modules.Publishing.Infrastructure;
 
@@ -11,9 +12,11 @@ using QuotesPlatform.Modules.Publishing.Infrastructure;
 namespace QuotesPlatform.Modules.Publishing.Infrastructure.Migrations
 {
     [DbContext(typeof(PublishingDbContext))]
-    partial class PublishingDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260915105521_AddOutbox")]
+    partial class AddOutbox
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
