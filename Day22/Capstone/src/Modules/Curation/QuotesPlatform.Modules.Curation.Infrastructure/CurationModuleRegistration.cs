@@ -35,8 +35,7 @@ public static class CurationModuleRegistration
         services.AddHostedService<CurationOutboxRelayService>();
         services.AddHostedService<CurationServiceBusConsumerHost>();
 
-        // Use-case handlers are registered here, keyed by integration event
-        // type, as they are written (Day 29, commit 11 onward).
+        services.AddKeyedScoped<IIntegrationEventHandler, CollectionApprovedHandler>(nameof(CollectionApproved));
 
         return services;
     }

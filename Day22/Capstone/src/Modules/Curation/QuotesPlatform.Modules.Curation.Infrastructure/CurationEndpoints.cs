@@ -81,7 +81,7 @@ public static class CurationEndpoints
                 // Enqueued on the SAME DbContext SaveChangesAsync below
                 // commits -- the aggregate's new state and the intent to
                 // publish land in one transaction, or neither does.
-                foreach (var integrationEvent in CurationIntegrationEventTranslator.Translate(collection.DomainEvents))
+                foreach (var integrationEvent in CurationIntegrationEventTranslator.Translate(collection, collection.DomainEvents))
                     await publisher.EnqueueAsync(integrationEvent, cancellationToken);
 
                 collection.ClearDomainEvents();
