@@ -282,6 +282,60 @@ jobs:
       # point-in-time artifact rather than a continuous check.
 
 
+  # Day 29. THE CAPSTONE HAD NO CHECK AT ALL UNTIL THIS JOB.
+  #
+  # `test` builds Day5/piece2 and `container` packages it; `infra` compiles the
+  # Bicep. None of them touch Day22/Capstone, so six thousand lines of the
+  # capstone landed on a pull request reporting "all checks have passed" -- a
+  # green tick that was true about other code. Two defects shipped underneath
+  # it: a hosted service that threw during startup, and four modules competing
+  # for one DI registration. The second is now impossible to express; the first
+  # is caught by QuotesPlatform.CompositionTests, which only runs if something
+  # runs it.
+  #
+  # Deliberately a separate job rather than another step on `test`: these are
+  # two different solutions on two different target frameworks, and a failure
+  # here should name the capstone rather than turn the existing check red for a
+  # reason that has nothing to do with it.
+  capstone:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore Day22/Capstone/QuotesPlatform.slnx
+
+      - name: Build
+        run: dotnet build Day22/Capstone/QuotesPlatform.slnx --no-restore --configuration Release
+
+      # ArchitectureTests read the .csproj files, so they fail the build on a
+      # boundary violation the day the reference is added rather than the day
+      # someone writes code that uses it. CompositionTests build the container
+      # the Host builds and construct every hosted service in it. Neither needs
+      # a database or a Service Bus namespace, which is why both can run here.
+      - name: Test
+        run: >
+          dotnet test Day22/Capstone/QuotesPlatform.slnx
+          --no-build
+          --configuration Release
+          --logger trx
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capstone-test-results
+          path: '**/TestResults/*.trx'
+          if-no-files-found: ignore
+
+
 # Required for merging into main:
 # GitHub branch protection (Settings -> Branches -> main, in the repo's
 # web UI) is what actually blocks a PR from merging on a red run of this
