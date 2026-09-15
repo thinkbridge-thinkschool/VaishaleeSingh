@@ -36,8 +36,10 @@ builder.Services.AddModerationModule(connectionString, serviceBusNamespace);
 
 var app = builder.Build();
 
-// Endpoints are mapped per module as the slices are built (Day 23 onwards).
+// Endpoints are mapped per module as the slices are built (Day 29 onwards).
 // Health is here because it is the Host's own concern, not any module's.
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+
+app.MapCatalogEndpoints();
 
 app.Run();
