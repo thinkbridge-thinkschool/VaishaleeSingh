@@ -25,7 +25,7 @@ public static class CatalogModuleRegistration
         services.AddDbContext<CatalogDbContext>(options => options.UseSqlServer(connectionString));
 
         services.AddScoped<IQuoteRepository, EfQuoteRepository>();
-        services.AddScoped<IIntegrationEventPublisher, EfOutboxIntegrationEventPublisher>();
+        services.AddScoped<ICatalogIntegrationEventPublisher, EfOutboxIntegrationEventPublisher>();
 
         services.AddSingleton(_ =>
             new ServiceBusClient(serviceBusFullyQualifiedNamespace, new DefaultAzureCredential()));

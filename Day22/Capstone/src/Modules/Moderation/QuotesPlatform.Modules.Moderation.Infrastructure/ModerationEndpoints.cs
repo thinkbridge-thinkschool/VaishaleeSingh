@@ -36,7 +36,7 @@ public static class ModerationEndpoints
 
         app.MapPost("/api/reviews/{id:guid}/approve", async (
             Guid id, ApproveReviewRequest request, IReviewRepository repository,
-            IIntegrationEventPublisher publisher, CancellationToken cancellationToken) =>
+            IModerationIntegrationEventPublisher publisher, CancellationToken cancellationToken) =>
         {
             var review = await repository.GetAsync(id, cancellationToken);
             if (review is null)

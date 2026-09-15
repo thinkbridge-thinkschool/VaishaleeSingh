@@ -25,7 +25,7 @@ public static class ModerationModuleRegistration
         services.AddDbContext<ModerationDbContext>(options => options.UseSqlServer(connectionString));
 
         services.AddScoped<IReviewRepository, EfReviewRepository>();
-        services.AddScoped<IIntegrationEventPublisher, EfOutboxIntegrationEventPublisher>();
+        services.AddScoped<IModerationIntegrationEventPublisher, EfOutboxIntegrationEventPublisher>();
 
         services.AddSingleton(_ =>
             new ServiceBusClient(serviceBusFullyQualifiedNamespace, new DefaultAzureCredential()));

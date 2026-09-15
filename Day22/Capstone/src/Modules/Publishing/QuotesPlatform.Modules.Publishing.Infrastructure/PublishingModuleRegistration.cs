@@ -25,7 +25,7 @@ public static class PublishingModuleRegistration
         services.AddDbContext<PublishingDbContext>(options => options.UseSqlServer(connectionString));
 
         services.AddScoped<IEditionRepository, EfEditionRepository>();
-        services.AddScoped<IIntegrationEventPublisher, EfOutboxIntegrationEventPublisher>();
+        services.AddScoped<IPublishingIntegrationEventPublisher, EfOutboxIntegrationEventPublisher>();
 
         services.AddSingleton(_ =>
             new ServiceBusClient(serviceBusFullyQualifiedNamespace, new DefaultAzureCredential()));

@@ -11,7 +11,7 @@ namespace QuotesPlatform.Modules.Catalog.Infrastructure;
 /// SaveChangesAsync commits the domain change and this row together, which is
 /// the whole guarantee ADR-0001 depends on.
 /// </summary>
-public sealed class EfOutboxIntegrationEventPublisher(CatalogDbContext db) : IIntegrationEventPublisher
+public sealed class EfOutboxIntegrationEventPublisher(CatalogDbContext db) : ICatalogIntegrationEventPublisher
 {
     public Task EnqueueAsync(IIntegrationEvent integrationEvent, CancellationToken cancellationToken = default)
     {

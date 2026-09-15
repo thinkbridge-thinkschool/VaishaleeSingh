@@ -68,7 +68,7 @@ public static class CurationEndpoints
 
         app.MapPost("/api/collections/{id:guid}/submit", async (
             Guid id, SubmitCollectionRequest request, ICollectionRepository repository,
-            IIntegrationEventPublisher publisher, CancellationToken cancellationToken) =>
+            ICurationIntegrationEventPublisher publisher, CancellationToken cancellationToken) =>
         {
             var collection = await repository.GetAsync(id, cancellationToken);
             if (collection is null)

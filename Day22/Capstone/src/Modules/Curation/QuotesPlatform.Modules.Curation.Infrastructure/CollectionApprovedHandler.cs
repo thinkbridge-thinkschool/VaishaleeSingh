@@ -12,7 +12,7 @@ namespace QuotesPlatform.Modules.Curation.Infrastructure;
 /// outbox row, and the host's own ProcessedMessages insert together.
 /// </summary>
 public sealed class CollectionApprovedHandler(
-    ICollectionRepository repository, IIntegrationEventPublisher publisher) : IIntegrationEventHandler
+    ICollectionRepository repository, ICurationIntegrationEventPublisher publisher) : IIntegrationEventHandler
 {
     public async Task HandleAsync(string payload, CancellationToken cancellationToken)
     {

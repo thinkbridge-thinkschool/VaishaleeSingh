@@ -25,7 +25,7 @@ public static class CurationModuleRegistration
         services.AddDbContext<CurationDbContext>(options => options.UseSqlServer(connectionString));
 
         services.AddScoped<ICollectionRepository, EfCollectionRepository>();
-        services.AddScoped<IIntegrationEventPublisher, EfOutboxIntegrationEventPublisher>();
+        services.AddScoped<ICurationIntegrationEventPublisher, EfOutboxIntegrationEventPublisher>();
 
         // One client per module rather than one shared client -- keeps a
         // module's messaging concern inside its own registration, the same
