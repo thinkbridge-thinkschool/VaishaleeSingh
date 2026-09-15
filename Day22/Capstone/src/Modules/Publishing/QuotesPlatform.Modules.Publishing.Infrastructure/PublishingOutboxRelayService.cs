@@ -35,7 +35,7 @@ public sealed class PublishingOutboxRelayService(
     private static readonly TimeSpan LeaseDuration = TimeSpan.FromSeconds(30);
 
     /// <summary>Identifies this relay in LockOwner -- a restarted process must not be mistaken for its predecessor's still-held leases.</summary>
-    private readonly string _owner = $"{Environment.MachineName}:{Environment.ProcessId}:{Guid.NewGuid():N}"[..64];
+    private readonly string _owner = BuildOwnerId();
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -161,7 +161,13 @@ public sealed class PublishingOutboxRelayService(
             // Below the retry budget: leave Pending and unlocked so the next
             // tick (or another instance) tries again. Past it: Failed, so a
             // permanently broken row stops being reclaimed forever.
-            var status = row.Attempts >= MaxAttempts ? OutboxStatus.Failed : OutboxStatus.Pending;
+            // ClaimBatchAsync already incremented Attempts in the database; row
+            // is the pre-claim snapshot, so the attempt just spent is
+            // row.Attempts + 1. Comparing the stale value spent one attempt
+            // more than MaxAttempts before a permanently broken row stopped
+            // being reclaimed.
+            var attemptsSoFar = row.Attempts + 1;
+            var status = attemptsSoFar >= MaxAttempts ? OutboxStatus.Failed : OutboxStatus.Pending;
 
             await db.OutboxMessages
                 .Where(m => m.Id == row.Id)
@@ -172,6 +178,24 @@ public sealed class PublishingOutboxRelayService(
                         .SetProperty(m => m.LockedUntilUtc, (DateTime?)null),
                     cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// Fits LockOwner's 64 characters -- and truncates only when there is
+    /// something to truncate.
+    ///
+    /// This was written as `[..64]`, which lowers to Substring(0, 64) and
+    /// therefore THROWS whenever the string is shorter than 64. A Windows
+    /// machine name is at most 15 characters, so the composed id is around 51
+    /// and it threw every time. A hosted service whose field initializer
+    /// throws fails while the host is starting, so the process never reached
+    /// the point of listening -- which is why no run of the happy path was
+    /// ever possible.
+    /// </summary>
+    private static string BuildOwnerId()
+    {
+        var owner = $"{Environment.MachineName}:{Environment.ProcessId}:{Guid.NewGuid():N}";
+        return owner.Length <= 64 ? owner : owner[..64];
     }
 
     private static string Truncate(string value, int maxLength) =>
