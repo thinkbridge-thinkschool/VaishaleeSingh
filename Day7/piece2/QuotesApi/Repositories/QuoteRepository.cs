@@ -20,6 +20,7 @@ public class QuoteRepository : IQuoteRepository
     public async Task<(IReadOnlyList<Quote> Items, int Total)> GetPagedAsync(
         int page,
         int size,
+        string? author,
         CancellationToken cancellationToken)
     {
         // Day 21 -- TagWith emits a SQL comment ahead of the statement, and
@@ -33,7 +34,14 @@ public class QuoteRepository : IQuoteRepository
         //
         // BOTH statements carry it, because a page read costs two round trips
         // and the measurement is of database load, not of query count.
-        var query = _db.Quotes.AsNoTracking().TagWith(Caching.CacheKeys.QuoteListQueryTag);
+        var query = _db.Quotes.AsNoTracking();
+
+        if (!string.IsNullOrWhiteSpace(author))
+        {
+            query = query.Where(q => EF.Functions.Like(q.Author, $"%{author.Trim()}%"));
+        }
+
+        query = query.TagWith(Caching.CacheKeys.QuoteListQueryTag);
 
         var total = await query.CountAsync(cancellationToken);
 

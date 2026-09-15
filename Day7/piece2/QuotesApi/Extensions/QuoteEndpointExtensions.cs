@@ -47,11 +47,13 @@ public static class QuoteEndpointExtensions
         var group = app.MapGroup($"{prefix}/quotes")
             .RequireAuthorization();
 
-        // GET /api/quotes?page=1&size=10 — list quotes, paged.
+        // GET /api/quotes?page=1&size=10&author=Seneca — list quotes, paged and
+        // optionally filtered across the database by author.
         // Needs the "quotes.read" scope.
         group.MapGet("/", async (
             int page,
             int size,
+            string? author,
             IQuoteListCache cache,
             // IOptionsSnapshot, not IOptions, and here that IS the right
             // choice -- unlike JwtOptions (see AuthService for why that one
@@ -89,7 +91,7 @@ public static class QuoteEndpointExtensions
             // false resolves PassThroughQuoteListCache, so both paths run the
             // same projection and cannot drift -- which is what lets a test
             // assert the cached response is byte-identical to the uncached one.
-            var result = await cache.GetPageAsync(page, size, cancellationToken);
+            var result = await cache.GetPageAsync(page, size, author, cancellationToken);
 
             // The shape is deliberately unchanged from before Day 21:
             // QuoteListPage's members are (Page, Size, Total, Items) and

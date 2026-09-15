@@ -26,17 +26,17 @@ export class QuotesApi {
   private readonly baseUrl = inject(API_BASE_URL);
 
   /**
-   * GET /api/quotes?page=&size=
+   * GET /api/quotes?page=&size=&author=
    *
    * Both parameters are required by the API -- it validates page >= 1 and
    * 1 <= size <= Pagination:MaxPageSize (100 by default) and returns a
    * validation problem otherwise -- so neither has a default here. A caller
    * that does not know its page size does not know what it is asking for.
    */
-  getPage(page: number, size: number): Promise<PagedResult<Quote>> {
+  getPage(page: number, size: number, author = ''): Promise<PagedResult<Quote>> {
     return firstValueFrom(
       this.http.get<PagedResult<Quote>>(`${this.baseUrl}/api/quotes`, {
-        params: { page, size },
+        params: author ? { page, size, author } : { page, size },
       }),
     );
   }

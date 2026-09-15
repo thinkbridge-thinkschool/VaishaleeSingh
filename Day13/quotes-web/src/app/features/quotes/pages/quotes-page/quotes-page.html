@@ -94,6 +94,7 @@
 <app-quote-form-dialog
   [open]="isCreateOpen()"
   [quote]="null"
+  [collections]="picker.collections() ?? []"
   [submitting]="store.isCreating()"
   [fieldErrors]="createFieldErrors()"
   (submitted)="createQuote($event)"

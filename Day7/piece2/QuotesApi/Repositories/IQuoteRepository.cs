@@ -7,6 +7,7 @@ public interface IQuoteRepository
     Task<(IReadOnlyList<Quote> Items, int Total)> GetPagedAsync(
         int page,
         int size,
+        string? author,
         CancellationToken cancellationToken);
 
     Task<Quote?> GetByIdAsync(

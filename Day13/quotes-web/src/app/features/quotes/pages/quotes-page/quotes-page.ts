@@ -1,13 +1,16 @@
 import { ChangeDetectionStrategy, Component, OnInit, inject, signal } from '@angular/core';
 
-import { CreateQuoteRequest, Quote, UpdateQuoteRequest } from '../../../../core/models/quote';
+import { Quote } from '../../../../core/models/quote';
 import { Button } from '../../../../shared/components/button/button';
 import { ConfirmDialog } from '../../../../shared/components/confirm-dialog/confirm-dialog';
 import { EmptyState } from '../../../../shared/components/empty-state/empty-state';
 import { ErrorState } from '../../../../shared/components/error-state/error-state';
 import { Loader } from '../../../../shared/components/loader/loader';
 import { Pagination } from '../../../../shared/components/pagination/pagination';
-import { QuoteFormDialog } from '../../components/quote-form-dialog/quote-form-dialog';
+import {
+  QuoteFormDialog,
+  QuoteFormSubmission,
+} from '../../components/quote-form-dialog/quote-form-dialog';
 import { QuotePreviewDialog } from '../../components/quote-preview-dialog/quote-preview-dialog';
 import { QuotesFilterBar } from '../../components/quotes-filter-bar/quotes-filter-bar';
 import { QuotesGrid } from '../../components/quotes-grid/quotes-grid';
@@ -49,6 +52,15 @@ import { QUOTE_PAGE_SIZES, QuotesStore } from '../../services/quotes-store';
 })
 export class QuotesPage implements OnInit {
   protected readonly store = inject(QuotesStore);
+
+  /**
+   * Also the source of the create dialog's "file into a collection" choices --
+   * see openCreate(). Sharing this instance rather than fetching separately
+   * means opening the create dialog after the per-card menu has already been
+   * used (or vice versa) does not ask the API for the same list twice.
+   */
+  protected readonly picker = inject(CollectionPicker);
+
   protected readonly pageSizes = QUOTE_PAGE_SIZES;
 
   protected readonly isCreateOpen = signal(false);
@@ -80,6 +92,14 @@ export class QuotesPage implements OnInit {
     // the same reason.
     this.store.dismissActionError();
     this.isCreateOpen.set(true);
+
+    // Lazy, like the per-card menu's own first open: most visits to this page
+    // never open either one, so there is no reason to ask for a list nobody
+    // may look at. Guarded on `null` (not loading) so opening the dialog twice
+    // in a row does not re-request it.
+    if (this.picker.collections() === null) {
+      void this.picker.retryLoad();
+    }
   }
 
   protected closeCreate(): void {
@@ -112,8 +132,9 @@ export class QuotesPage implements OnInit {
     this.editingQuote.set(null);
   }
 
-  protected async createQuote(request: CreateQuoteRequest): Promise<void> {
-    const fieldErrors = await this.store.create(request);
+  protected async createQuote(submission: QuoteFormSubmission): Promise<void> {
+    const { collectionId, ...request } = submission;
+    const fieldErrors = await this.store.create(request, collectionId);
 
     this.createFieldErrors.set(fieldErrors);
 
@@ -124,13 +145,21 @@ export class QuotesPage implements OnInit {
     }
   }
 
-  protected async updateQuote(request: UpdateQuoteRequest): Promise<void> {
+  protected async updateQuote(submission: QuoteFormSubmission): Promise<void> {
     const quote = this.editingQuote();
 
     if (!quote) {
       return;
     }
 
+    // collectionId is dropped rather than sent: the edit form hides the field
+    // (see QuoteFormDialog), and PUT /api/quotes/{id} has no such field to
+    // accept it on.
+    const request = {
+      author: submission.author,
+      text: submission.text,
+      backgroundImageUrl: submission.backgroundImageUrl,
+    };
     const fieldErrors = await this.store.update(quote.id, request);
     this.editFieldErrors.set(fieldErrors);
 

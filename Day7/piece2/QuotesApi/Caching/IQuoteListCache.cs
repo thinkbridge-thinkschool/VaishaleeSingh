@@ -22,7 +22,11 @@ namespace QuotesApi.Caching;
 /// </summary>
 public interface IQuoteListCache
 {
-    Task<QuoteListPage> GetPageAsync(int page, int size, CancellationToken cancellationToken);
+    Task<QuoteListPage> GetPageAsync(
+        int page,
+        int size,
+        string? author,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// Called after a quote write commits. Cheap, and safe to call when

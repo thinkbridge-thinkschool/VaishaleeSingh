@@ -10,12 +10,9 @@ import { CollectionsApi } from '../../../core/services/collections-api';
  * DELIBERATELY NOT SHAPED LIKE CollectionDetailStore. That store re-reads a
  * whole CollectionDetail after every mutation because POST /items returns the
  * write-model aggregate, not the read-model shape a detail screen needs. This
- * screen never needed the read-model shape in the first place -- it only ever
- * shows a collection's name and quoteCount, both already present on
- * CollectionListItem, so a successful add just increments the count in place.
- * Re-fetching all of GET /api/collections after every single add to keep that
- * one field byte-for-server-accurate would be trading a real cost (a request)
- * for a benefit nothing on this screen can tell the difference from.
+ * screen uses CollectionListItem for names/counts and reads collection details
+ * only when it needs to mark an already-added quote green. A successful add
+ * increments the list count and patches that membership locally.
  *
  * ONE INSTANCE FOR THE WHOLE PAGE, not one per card (see QuotesPage's
  * providers): the collections list is the same regardless of which quote you
@@ -34,6 +31,7 @@ export class CollectionPicker {
   private readonly listFailure = signal<ApiFailure | null>(null);
 
   private readonly openForQuoteId = signal<number | null>(null);
+  private readonly membership = signal<Readonly<Record<string, boolean>>>({});
 
   /** `${quoteId}:${collectionId}` of the add currently in flight, or null. */
   private readonly addingKey = signal<string | null>(null);
@@ -59,6 +57,10 @@ export class CollectionPicker {
     return this.addingKey() === addKey(quoteId, collectionId);
   }
 
+  isInCollection(quoteId: number, collectionId: number): boolean {
+    return this.membership()[addKey(quoteId, collectionId)] === true;
+  }
+
   /**
    * Opens (or closes, on a second click of the same card) this quote's menu.
    * The collections list is fetched lazily, on the first-ever open across the
@@ -78,6 +80,8 @@ export class CollectionPicker {
     if (this.collectionsList() === null && !this.loadingList()) {
       await this.loadCollections();
     }
+
+    await this.loadMembership(quoteId);
   }
 
   close(): void {
@@ -130,6 +134,11 @@ export class CollectionPicker {
         );
       }
 
+      this.membership.update((current) => ({
+        ...current,
+        [key]: true,
+      }));
+
       return true;
     } catch (error) {
       this.addFailure.set(toApiFailure(error));
@@ -137,6 +146,42 @@ export class CollectionPicker {
     } finally {
       this.addingKey.set(null);
     }
+  }
+
+  private async loadMembership(quoteId: number): Promise<void> {
+    const collections = this.collectionsList();
+
+    if (!collections) {
+      return;
+    }
+
+    const missing = collections.filter(
+      (collection) =>
+        !Object.prototype.hasOwnProperty.call(this.membership(), addKey(quoteId, collection.id)),
+    );
+
+    if (missing.length === 0) {
+      return;
+    }
+
+    const results = await Promise.all(
+      missing.map(async (collection) => {
+        try {
+          const detail = await this.api.getById(collection.id);
+          return [
+            addKey(quoteId, collection.id),
+            detail.quotes.some((quote) => quote.quoteId === quoteId),
+          ] as const;
+        } catch {
+          return [addKey(quoteId, collection.id), false] as const;
+        }
+      }),
+    );
+
+    this.membership.update((current) => ({
+      ...current,
+      ...Object.fromEntries(results),
+    }));
   }
 }
 

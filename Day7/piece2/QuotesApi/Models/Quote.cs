@@ -4,18 +4,25 @@ public class Quote
 {
     private static readonly string[] DefaultBackgroundImageUrls =
     {
-        "/quote-backgrounds/mountain-1.webp",
-        "/quote-backgrounds/mountain-2.webp",
-        "/quote-backgrounds/mountain-3.webp",
-        "/quote-backgrounds/mountain-4.webp",
-        "/quote-backgrounds/mountain-5.webp",
-        "/quote-backgrounds/mountain-6.webp"
+        "/quote-backgrounds/mountain-1.jpg",
+        "/quote-backgrounds/mountain-2.jpg",
+        "/quote-backgrounds/mountain-3.jpg",
+        "/quote-backgrounds/mountain-4.jpg",
+        "/quote-backgrounds/mountain-5.jpg",
+        "/quote-backgrounds/mountain-6.jpg"
     };
 
     public int Id { get; set; }
     public string Author { get; set; } = "";
     public string Text { get; set; } = "";
-    public string BackgroundImageUrl { get; set; } = DefaultBackgroundImageUrls[0];
+
+    private string _backgroundImageUrl = DefaultBackgroundImageUrls[0];
+
+    public string BackgroundImageUrl
+    {
+        get => NormalizeBackgroundImageUrl(_backgroundImageUrl);
+        set => _backgroundImageUrl = value;
+    }
 
     /// <summary>
     /// Id of the user who created this quote — taken from their token's
@@ -95,6 +102,13 @@ public class Quote
         }
 
         return trimmed;
+    }
+
+    private static string NormalizeBackgroundImageUrl(string url)
+    {
+        return url.StartsWith("/quote-backgrounds/", StringComparison.OrdinalIgnoreCase)
+            ? url.Replace(".webp", ".jpg", StringComparison.OrdinalIgnoreCase)
+            : url;
     }
 
     public static string SelectDefaultBackground(string? seedText)

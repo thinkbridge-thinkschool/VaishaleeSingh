@@ -4,9 +4,9 @@
       <app-text-field
         label="Filter"
         type="search"
-        placeholder="Author or text"
+        placeholder="Author"
         [control]="searchControl"
-        hint="Search within the current page. Use pagination to explore more quotes."
+        hint="Searches all quotes by author. Results are still paged for display."
       />
     </div>
 
@@ -16,13 +16,9 @@
   </div>
 
   @if (isFiltering()) {
-    <!--
-      aria-live so the count is announced after typing stops. It says "on this
-      page" because that is exactly what the filter can see -- claiming a total
-      would be wrong.
-    -->
+    <!-- aria-live announces the database-wide result count after searching. -->
     <p class="filters__count" aria-live="polite">
-      {{ matchCount() }} of {{ fetchedCount() }} on this page match
+      {{ matchCount() }} quote{{ matchCount() === 1 ? '' : 's' }} found
     </p>
   }
 </app-card>

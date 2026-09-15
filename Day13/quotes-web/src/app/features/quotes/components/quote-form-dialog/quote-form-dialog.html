@@ -1,9 +1,4 @@
-<app-modal
-  [open]="open()"
-  [busy]="submitting()"
-  [title]="modalTitle()"
-  (closed)="cancelled.emit()"
->
+<app-modal [open]="open()" [busy]="submitting()" [title]="modalTitle()" (closed)="cancelled.emit()">
   <form class="quote-form" [formGroup]="form" (ngSubmit)="submit()" novalidate>
     <app-text-field
       label="Author"
@@ -27,6 +22,14 @@
       [options]="backgroundOptions"
     />
 
+    @if (!quote()) {
+      <app-select-field
+        label="Collection"
+        hint="Optionally file this quote into one of your collections."
+        [control]="form.controls.collectionId"
+        [options]="collectionOptions()"
+      />
+    }
     <!--
       A submit button inside the form, hidden from view: it is what makes Enter
       submit the form, which the footer's button (outside the <form>, in the

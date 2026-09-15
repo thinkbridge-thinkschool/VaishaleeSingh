@@ -26,6 +26,7 @@ public sealed class PassThroughQuoteListCache(
     public async Task<QuoteListPage> GetPageAsync(
         int page,
         int size,
+        string? author,
         CancellationToken cancellationToken)
     {
         metrics.RecordRequest(CacheKeys.QuoteListFamily);
@@ -34,7 +35,7 @@ public sealed class PassThroughQuoteListCache(
         await using var scope = scopeFactory.CreateAsyncScope();
         var repository = scope.ServiceProvider.GetRequiredService<IQuoteRepository>();
 
-        var (items, total) = await repository.GetPagedAsync(page, size, cancellationToken);
+        var (items, total) = await repository.GetPagedAsync(page, size, author, cancellationToken);
 
         return new QuoteListPage(page, size, total, items.Select(QuoteListItem.From).ToList());
     }
