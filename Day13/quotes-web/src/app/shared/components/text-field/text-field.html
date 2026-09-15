@@ -4,7 +4,6 @@
 
     @if (isRequired()) {
       <span class="field__required" aria-hidden="true">*</span>
-      <span class="u-visually-hidden">(required)</span>
     } @else if (showOptionalHint()) {
       <span class="field__optional">optional</span>
     }
@@ -20,6 +19,7 @@
     [attr.placeholder]="placeholder() || null"
     [attr.autocomplete]="autocomplete() || null"
     [attr.maxlength]="maxLength()"
+    [attr.aria-required]="isRequired() ? 'true' : null"
     [attr.aria-describedby]="describedBy()"
     [attr.aria-invalid]="hasError() ? 'true' : null"
   />
