@@ -173,7 +173,7 @@ foreach ($name in $subscriptions.Keys) {
             '--resource-group', $ResourceGroup, '--namespace-name', $Namespace,
             '--topic-name', $TopicName, '--name', $name,
             '--max-delivery-count', "$MaxDeliveryCount",
-            '--dead-letter-on-message-expiration', 'true',
+            '--enable-dead-lettering-on-message-expiration', 'true',
             '--lock-duration', 'PT1M',
             '-o', 'none') | Out-Null
         Write-Host $(if ($DryRun) { "  would create $name" } else { "  created $name" })
