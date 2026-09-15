@@ -74,7 +74,23 @@ function Invoke-Az {
         return $null
     }
 
-    $output = & az @Arguments 2>&1
+    # az writes its errors to stderr. Merging stderr into the output stream
+    # while $ErrorActionPreference is 'Stop' makes PowerShell raise a
+    # terminating NativeCommandError the moment az says anything there --
+    # before $LASTEXITCODE is read. That made -AllowFailure unreachable, so
+    # the first "does this exist?" probe that legitimately missed killed the
+    # script instead of creating the entity. Drop to 'Continue' for the
+    # duration of the call and decide on the exit code, which is the only
+    # signal az gives us that distinguishes absent from broken.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = & az @Arguments 2>&1
+    }
+    finally {
+        $ErrorActionPreference = $previous
+    }
+
     if ($LASTEXITCODE -ne 0) {
         if ($AllowFailure) { return $null }
 
@@ -86,6 +102,32 @@ function Invoke-Az {
     return $output
 }
 
+function Test-AzEntity {
+    <#
+        Existence probe. Deliberately runs even under -DryRun: 'show' is
+        read-only, and a dry run that skips its probes cannot tell you what a
+        real run would do -- it can only tell you what it would type. The
+        earlier version reported "already exists" for every entity because a
+        skipped probe returns $null and $null was read as "found".
+
+        Returns a boolean from the exit code rather than from output, because
+        '-o none' prints nothing on success and nothing is indistinguishable
+        from absent.
+    #>
+    param([string[]] $Arguments)
+
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & az @Arguments 2>&1 | Out-Null
+    }
+    finally {
+        $ErrorActionPreference = $previous
+    }
+
+    return ($LASTEXITCODE -eq 0)
+}
+
 Write-Host "Subscription : $SubscriptionId"
 Write-Host "Namespace    : $Namespace ($ResourceGroup)"
 Write-Host "Topic        : $TopicName"
@@ -94,12 +136,12 @@ Write-Host ""
 Invoke-Az @('account', 'set', '--subscription', $SubscriptionId) | Out-Null
 
 Write-Host "== Topic =="
-$existingTopic = Invoke-Az @(
+$topicExists = Test-AzEntity @(
     'servicebus', 'topic', 'show',
     '--resource-group', $ResourceGroup, '--namespace-name', $Namespace,
-    '--name', $TopicName, '-o', 'none') -AllowFailure
+    '--name', $TopicName, '-o', 'none')
 
-if ($null -eq $existingTopic -and -not $DryRun) {
+if (-not $topicExists) {
     Invoke-Az @(
         'servicebus', 'topic', 'create',
         '--resource-group', $ResourceGroup, '--namespace-name', $Namespace,
@@ -120,12 +162,12 @@ foreach ($name in $subscriptions.Keys) {
     Write-Host ""
     Write-Host "== Subscription $name =="
 
-    $existing = Invoke-Az @(
+    $subscriptionExists = $topicExists -and (Test-AzEntity @(
         'servicebus', 'topic', 'subscription', 'show',
         '--resource-group', $ResourceGroup, '--namespace-name', $Namespace,
-        '--topic-name', $TopicName, '--name', $name, '-o', 'none') -AllowFailure
+        '--topic-name', $TopicName, '--name', $name, '-o', 'none'))
 
-    if ($null -eq $existing -and -not $DryRun) {
+    if (-not $subscriptionExists) {
         Invoke-Az @(
             'servicebus', 'topic', 'subscription', 'create',
             '--resource-group', $ResourceGroup, '--namespace-name', $Namespace,
