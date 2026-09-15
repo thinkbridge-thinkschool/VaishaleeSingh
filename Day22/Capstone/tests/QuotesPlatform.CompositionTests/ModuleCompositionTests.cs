@@ -81,9 +81,17 @@ public class ModuleCompositionTests
     }
 
     [Fact]
-    public void Every_hosted_service_can_be_constructed()
+    public async Task Every_hosted_service_can_be_constructed()
     {
-        using var provider = Compose().BuildServiceProvider(validateScopes: true);
+        // `await using`, not `using`, and the difference is not cosmetic: the
+        // container holds a ServiceBusClient, which implements IAsyncDisposable
+        // and NOT IDisposable. Disposing a provider that holds one synchronously
+        // throws -- "type only implements IAsyncDisposable. Use DisposeAsync to
+        // dispose the container." The Host never meets this because
+        // WebApplication disposes asynchronously; a test reaching for `using`
+        // out of habit does, and it fails AFTER every assertion has passed,
+        // which reads like a broken assertion and is not one.
+        await using var provider = Compose().BuildServiceProvider(validateScopes: true);
 
         // Resolving the collection CONSTRUCTS each one, which is the whole
         // point: this is the assertion the `[..64]` crash failed.
@@ -104,10 +112,15 @@ public class ModuleCompositionTests
     }
 
     [Fact]
-    public void Each_module_resolves_its_own_outbox_publisher()
+    public async Task Each_module_resolves_its_own_outbox_publisher()
     {
-        using var provider = Compose().BuildServiceProvider(validateScopes: true);
-        using var scope = provider.CreateScope();
+        // Async here too, though this test passed while the one above did not:
+        // it resolves only scoped publishers, so the singleton ServiceBusClient
+        // was never constructed and never registered for disposal. That is luck,
+        // not a property -- one added assertion that touches a hosted service
+        // and this fails the same way.
+        await using var provider = Compose().BuildServiceProvider(validateScopes: true);
+        await using var scope = provider.CreateAsyncScope();
         var services = scope.ServiceProvider;
 
         ModuleOf(services.GetRequiredService<ICatalogIntegrationEventPublisher>().GetType())

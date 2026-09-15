@@ -125,6 +125,16 @@ true about other code entirely.
 | A `capstone` job that restores, builds and tests `Day22/Capstone/QuotesPlatform.slnx` | `.github/workflows/ci.yml` |
 | Composition tests: no service type registered by two modules, every hosted service constructs, each module resolves its own publisher | **new** `Day22/Capstone/tests/QuotesPlatform.CompositionTests` |
 
+**The CI job paid for itself before it ever passed.** Its first two runs failed
+on the composition test project rather than on the code under review — a
+package downgrade (`Microsoft.Extensions.Logging 10.0.0` against EF Core's own
+`>= 10.0.10`), then an `InvalidOperationException` on teardown, because
+`ServiceBusClient` implements `IAsyncDisposable` and not `IDisposable`, so a
+synchronous `using` on a provider holding one throws after every assertion has
+already passed. The Host never meets the second one — `WebApplication` disposes
+asynchronously — which is exactly the kind of difference that only shows up
+when something composes the container outside the Host.
+
 The composition tests are the point. Defect 2 is now impossible to express —
 a module cannot resolve another module's publisher because it cannot see the
 type — and defect 1 is caught by constructing every hosted service, which is
