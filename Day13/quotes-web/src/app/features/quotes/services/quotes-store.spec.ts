@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_QUOTE_BACKGROUND_URL, PagedResult, Quote } from '../../../core/models/quote';
 import { AuthStore } from '../../../core/services/auth-store';
+import { CollectionsApi } from '../../../core/services/collections-api';
 import { QuotesApi } from '../../../core/services/quotes-api';
 import { QuotesStore } from './quotes-store';
 
@@ -36,7 +37,11 @@ function makePage(items: readonly Quote[], total = items.length): PagedResult<Qu
 }
 
 describe('QuotesStore', () => {
-  let api: { getPage: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn>; delete: ReturnType<typeof vi.fn> };
+  let api: {
+    getPage: ReturnType<typeof vi.fn>;
+    create: ReturnType<typeof vi.fn>;
+    delete: ReturnType<typeof vi.fn>;
+  };
 
   beforeEach(() => {
     api = { getPage: vi.fn(), create: vi.fn(), delete: vi.fn() };
@@ -125,30 +130,32 @@ describe('QuotesStore', () => {
     expect(store.showLoading()).toBe(false);
   });
 
-  it('filters the fetched page client-side without another request', async () => {
-    api.getPage.mockResolvedValue(
-      makePage([makeQuote(1, { author: 'Seneca' }), makeQuote(2, { author: 'Marcus' })]),
-    );
+  it('asks the backend for a global author search and uses its filtered total', async () => {
+    api.getPage.mockResolvedValue(makePage([makeQuote(1, { author: 'Seneca' })], 37));
 
     const store = TestBed.inject(QuotesStore);
     await store.load();
 
     store.setSearch('seneca');
+    await Promise.resolve();
 
-    expect(store.matchCount()).toBe(1);
+    expect(store.matchCount()).toBe(37);
     expect(store.items()[0].author).toBe('Seneca');
     expect(store.isFiltering()).toBe(true);
-
-    // The point of the assertion: one call, from load(). Filtering does not page.
-    expect(api.getPage).toHaveBeenCalledTimes(1);
+    expect(api.getPage).toHaveBeenLastCalledWith(1, 12, 'seneca');
   });
 
   it('reports no-matches separately from empty, so the two read differently', async () => {
-    api.getPage.mockResolvedValue(makePage([makeQuote(1, { author: 'Seneca' })]));
+    api.getPage
+      .mockResolvedValueOnce(makePage([makeQuote(1, { author: 'Seneca' })], 1))
+      .mockResolvedValueOnce(makePage([], 0));
 
     const store = TestBed.inject(QuotesStore);
     await store.load();
     store.setSearch('nothing matches this');
+    await vi.waitFor(() =>
+      expect(api.getPage).toHaveBeenLastCalledWith(1, 12, 'nothing matches this'),
+    );
 
     expect(store.showNoMatches()).toBe(true);
     expect(store.showEmpty()).toBe(false);

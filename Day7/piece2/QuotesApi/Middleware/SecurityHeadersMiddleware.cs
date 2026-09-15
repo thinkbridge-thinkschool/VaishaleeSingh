@@ -93,11 +93,16 @@ public class SecurityHeadersMiddleware(RequestDelegate next)
         {
             foreach (var (name, value) in Headers)
             {
+                var headerValue = name == "Cross-Origin-Resource-Policy" &&
+                    context.Request.Path.StartsWithSegments("/quote-backgrounds")
+                    ? "cross-origin"
+                    : value;
+
                 // Append only when absent: a response that deliberately set
                 // its own value keeps it. Assigning would let this middleware
                 // silently overrule an endpoint that knew better.
                 if (!context.Response.Headers.ContainsKey(name))
-                    context.Response.Headers[name] = value;
+                    context.Response.Headers[name] = headerValue;
             }
 
             // HSTS only where the BROWSER's connection is HTTPS.

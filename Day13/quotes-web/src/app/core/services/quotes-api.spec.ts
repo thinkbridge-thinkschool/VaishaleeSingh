@@ -80,4 +80,24 @@ describe('QuotesApi Week-1 contract', () => {
     expect((error as HttpErrorResponse).error.errors).toEqual(validationProblem.errors);
     httpMock.verify();
   });
+
+  it('sends an author filter to the backend', async () => {
+    const response: PagedResult<Quote> = {
+      page: 1,
+      size: 12,
+      total: 1,
+      items: [],
+    };
+
+    const result = api.getPage(1, 12, 'Seneca');
+    const request = httpMock.expectOne(
+      'http://week-one-api.test/api/quotes?page=1&size=12&author=Seneca',
+    );
+
+    expect(request.request.method).toBe('GET');
+    request.flush(response);
+
+    await expect(result).resolves.toEqual(response);
+    httpMock.verify();
+  });
 });

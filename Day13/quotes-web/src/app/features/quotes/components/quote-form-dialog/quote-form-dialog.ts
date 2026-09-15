@@ -1,8 +1,15 @@
-import { ChangeDetectionStrategy, Component, effect, input, output, viewChild } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  effect,
+  input,
+  output,
+  viewChild,
+} from '@angular/core';
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 
+import { CollectionListItem } from '../../../../core/models/collection';
 import {
-  CreateQuoteRequest,
   DEFAULT_QUOTE_BACKGROUND_URL,
   QUOTE_BACKGROUND_OPTIONS,
   QUOTE_LIMITS,
@@ -14,6 +21,24 @@ import { SelectField, SelectOption } from '../../../../shared/components/select-
 import { TextField } from '../../../../shared/components/text-field/text-field';
 import { TextareaField } from '../../../../shared/components/textarea-field/textarea-field';
 import { noWhitespace } from '../../../../shared/forms/no-whitespace.validator';
+
+/**
+ * What `submitted` emits: the API request fields, plus which collection (if
+ * any) the quote should be filed into.
+ *
+ * `collectionId` rides alongside `CreateQuoteRequest`/`UpdateQuoteRequest`
+ * rather than inside them because the API has no such field on either --
+ * filing a quote into a collection is a second request
+ * (POST /api/collections/{id}/items) the parent makes after the quote itself
+ * exists. Callers that don't care about it (the edit flow, where the field is
+ * hidden) simply ignore it.
+ */
+export interface QuoteFormSubmission {
+  readonly author: string;
+  readonly text: string;
+  readonly backgroundImageUrl: string;
+  readonly collectionId: number | null;
+}
 
 /**
  * The "new quote" dialog: a typed form inside the shared Modal.
@@ -31,6 +56,8 @@ import { noWhitespace } from '../../../../shared/forms/no-whitespace.validator';
   imports: [ReactiveFormsModule, Modal, Button, TextField, TextareaField, SelectField],
 })
 export class QuoteFormDialog {
+  /** The signed-in user's collections, to offer as "file into" choices. Empty when the parent has none loaded. */
+  readonly collections = input<readonly CollectionListItem[]>([]);
   readonly open = input(false);
   readonly submitting = input(false);
   readonly quote = input<Quote | null>(null);
@@ -42,7 +69,7 @@ export class QuoteFormDialog {
    */
   readonly fieldErrors = input<Readonly<Record<string, readonly string[]>>>({});
 
-  readonly submitted = output<CreateQuoteRequest>();
+  readonly submitted = output<QuoteFormSubmission>();
   readonly cancelled = output<void>();
 
   protected readonly limits = QUOTE_LIMITS;
@@ -52,6 +79,20 @@ export class QuoteFormDialog {
       label: option.label,
     }),
   );
+
+  /**
+   * `''` (the "None" option) rather than `collections()` being empty is what a
+   * value of "no collection chosen" looks like -- SelectOption values are
+   * strings because a native `<option>`'s value is, which is also why the id
+   * is stringified here and parsed back in `submit()`.
+   */
+  protected readonly collectionOptions = (): readonly SelectOption[] => [
+    { value: '', label: 'None' },
+    ...this.collections().map((collection) => ({
+      value: collection.id.toString(),
+      label: collection.name,
+    })),
+  ];
 
   protected readonly form = new FormGroup({
     author: new FormControl('', {
@@ -73,6 +114,10 @@ export class QuoteFormDialog {
     backgroundImageUrl: new FormControl(DEFAULT_QUOTE_BACKGROUND_URL, {
       nonNullable: true,
       validators: [Validators.required],
+    }),
+    // No validators: "None" (`''`) is a legitimate choice, not an incomplete one.
+    collectionId: new FormControl('', {
+      nonNullable: true,
     }),
   });
 
@@ -97,6 +142,9 @@ export class QuoteFormDialog {
           author: quote?.author ?? '',
           text: quote?.text ?? '',
           backgroundImageUrl: quote?.backgroundImageUrl ?? DEFAULT_QUOTE_BACKGROUND_URL,
+          // Quotes don't carry a collection of their own (see QuoteFormSubmission) --
+          // there is nothing on `quote` to restore this from, in either mode.
+          collectionId: '',
         });
         this.form.markAsUntouched();
       }
@@ -134,7 +182,7 @@ export class QuoteFormDialog {
       return;
     }
 
-    const { author, text, backgroundImageUrl } = this.form.getRawValue();
+    const { author, text, backgroundImageUrl, collectionId } = this.form.getRawValue();
 
     // Trimmed here as well as server-side: the API normalises whitespace itself
     // (IQuoteTextNormalizer), so sending " Seneca " would succeed and then come
@@ -144,6 +192,9 @@ export class QuoteFormDialog {
       author: author.trim(),
       text: text.trim(),
       backgroundImageUrl: backgroundImageUrl.trim(),
+      // Only meaningful when creating -- the field is hidden in edit mode, so
+      // this stays '' (-> null) there regardless of what the control holds.
+      collectionId: !this.quote() && collectionId ? Number(collectionId) : null,
     });
   }
 

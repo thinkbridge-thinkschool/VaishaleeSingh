@@ -50,19 +50,21 @@ public sealed class HybridQuoteListCache(
     public async Task<QuoteListPage> GetPageAsync(
         int page,
         int size,
+        string? author,
         CancellationToken cancellationToken)
     {
         metrics.RecordRequest(CacheKeys.QuoteListFamily);
 
-        // Deep pages are not cached. See CacheOptions.MaxCachedPage: `page` is
+        // Search results are served directly because the author is an unbounded
+        // cache-key dimension. See CacheOptions.MaxCachedPage: `page` is
         // unbounded by the endpoint's validation, so caching every page a
         // caller cares to name would let them mint cache entries without
         // limit. A page past the hot range is served from the database, which
         // is the correct place for a read that is by definition not hot.
-        if (page > _options.MaxCachedPage)
+        if (!string.IsNullOrWhiteSpace(author) || page > _options.MaxCachedPage)
         {
             metrics.RecordBypass(CacheKeys.QuoteListFamily);
-            return await LoadDirectAsync(page, size, cancellationToken);
+            return await LoadDirectAsync(page, size, author, cancellationToken);
         }
 
         var token = await generation.GetAsync(cancellationToken);
@@ -92,7 +94,7 @@ public sealed class HybridQuoteListCache(
             await using var scope = scopeFactory.CreateAsyncScope();
             var repository = scope.ServiceProvider.GetRequiredService<IQuoteRepository>();
 
-            var (items, total) = await repository.GetPagedAsync(state.Page, state.Size, ct);
+            var (items, total) = await repository.GetPagedAsync(state.Page, state.Size, author, ct);
 
             var result = new QuoteListPage(
                 state.Page,
@@ -119,12 +121,13 @@ public sealed class HybridQuoteListCache(
     private async Task<QuoteListPage> LoadDirectAsync(
         int page,
         int size,
+        string? author,
         CancellationToken cancellationToken)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var repository = scope.ServiceProvider.GetRequiredService<IQuoteRepository>();
 
-        var (items, total) = await repository.GetPagedAsync(page, size, cancellationToken);
+        var (items, total) = await repository.GetPagedAsync(page, size, author, cancellationToken);
 
         return new QuoteListPage(page, size, total, items.Select(QuoteListItem.From).ToList());
     }

@@ -10,6 +10,7 @@ import {
 } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormControl } from '@angular/forms';
+import { debounceTime, distinctUntilChanged } from 'rxjs';
 
 import { Card } from '../../../../shared/components/card/card';
 import { SelectField, SelectOption } from '../../../../shared/components/select-field/select-field';
@@ -61,6 +62,7 @@ export class QuotesFilterBar {
 
   constructor() {
     this.searchControl.valueChanges
+      .pipe(debounceTime(250), distinctUntilChanged())
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe((term) => this.searchChange.emit(term));
 

@@ -41,7 +41,74 @@
     </a>
 
     <footer class="quote__footer">
+      <div class="quote__collect">
+        <button
+          #collectToggle
+          type="button"
+          class="quote__collect-toggle"
+          [class.quote__collect-toggle--open]="picker.isOpenFor(quote().id)"
+          [attr.aria-expanded]="picker.isOpenFor(quote().id)"
+          [attr.aria-label]="'Add the quote by ' + quote().author + ' to a collection'"
+          (click)="togglePicker()"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+          >
+            <path
+              d="M11.6 2H4a2 2 0 0 0-2 2v7.6c0 .53.21 1.04.59 1.41l8.4 8.4a2 2 0 0 0 2.82 0l7.6-7.6a2 2 0 0 0 0-2.82l-8.4-8.4A2 2 0 0 0 11.6 2Z"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linejoin="round"
+            />
+            <circle cx="7.5" cy="7.5" r="1.25" fill="currentColor" />
+          </svg>
+        </button>
 
+        <!--
+          popover="auto", not a plain div -- see quote-card.ts's constructor
+          comment for why: it is what escapes app-card's own overflow: hidden.
+        -->
+        <div #collectMenu class="quote__collect-menu" popover="auto">
+          @if (picker.isLoadingCollections()) {
+            <p class="quote__collect-status">Loading your collections…</p>
+          } @else if (picker.collectionsError(); as failure) {
+            <p class="quote__collect-status quote__collect-status--error">{{ failure.message }}</p>
+            <button type="button" class="quote__collect-retry" (click)="retryLoadCollections()">
+              Try again
+            </button>
+          } @else if (picker.collections(); as collections) {
+            @if (collections.length === 0) {
+              <p class="quote__collect-status">You have no collections yet.</p>
+            } @else {
+              <ul class="quote__collect-list">
+                @for (collection of collections; track collection.id) {
+                  <li>
+                    <button
+                      type="button"
+                      class="quote__collect-item"
+                      [disabled]="picker.isAdding(quote().id, collection.id)"
+                      (click)="addToCollection(collection.id)"
+                    >
+                      <span class="quote__collect-item-name">{{ collection.name }}</span>
+                      @if (picker.isInCollection(quote().id, collection.id)) {
+                        <app-badge tone="success">Added</app-badge>
+                      }
+                      <span class="quote__collect-item-count">{{ collection.quoteCount }}</span>
+                    </button>
+                  </li>
+                }
+              </ul>
+            }
+          }
+
+          @if (picker.addError(); as failure) {
+            <p class="quote__collect-status quote__collect-status--error">{{ failure.message }}</p>
+          }
+        </div>
+      </div>
 
       @if (deletable()) {
         <app-button

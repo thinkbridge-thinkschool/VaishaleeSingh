@@ -3,6 +3,7 @@ import { Injectable, computed, inject, signal } from '@angular/core';
 import { ApiFailure, toApiFailure } from '../../../core/models/api-failure';
 import { CreateQuoteRequest, Quote, UpdateQuoteRequest } from '../../../core/models/quote';
 import { AuthStore } from '../../../core/services/auth-store';
+import { CollectionsApi } from '../../../core/services/collections-api';
 import { QuotesApi } from '../../../core/services/quotes-api';
 import { QuoteRow } from '../models/quote-row';
 
@@ -38,6 +39,7 @@ export const QUOTE_PAGE_SIZES = [6, 12, 24, 48] as const;
 @Injectable()
 export class QuotesStore {
   private readonly api = inject(QuotesApi);
+  private readonly collectionsApi = inject(CollectionsApi);
   private readonly authStore = inject(AuthStore);
 
   // --- Raw state -------------------------------------------------------------
@@ -52,6 +54,7 @@ export class QuotesStore {
   private readonly creating = signal(false);
   private readonly updating = signal(false);
   private readonly deletingQuoteId = signal<number | null>(null);
+  private loadSequence = 0;
 
   /**
    * A create, update or delete that failed for a reason OTHER than a
@@ -79,28 +82,8 @@ export class QuotesStore {
   readonly deletingId = this.deletingQuoteId.asReadonly();
   readonly actionError = this.mutationFailure.asReadonly();
 
-  /**
-   * The rows to render: the fetched page, narrowed by the query.
-   *
-   * The filter is CLIENT-SIDE and only sees the current page, because the API has
-   * no search parameter -- GET /api/quotes takes page and size and nothing else.
-   * That is a real limitation and the UI says so rather than implying a
-   * whole-collection search (see the filter bar's hint). The alternative, fetching
-   * everything to filter it here, would be a lie about what the endpoint is for.
-   */
-  readonly items = computed(() => {
-    const term = this.query().trim().toLowerCase();
-    const page = this.quotes();
-
-    if (!term) {
-      return page;
-    }
-
-    return page.filter(
-      (quote) =>
-        quote.author.toLowerCase().includes(term) || quote.text.toLowerCase().includes(term),
-    );
-  });
+  /** The current server-filtered page. The API owns the full-database search. */
+  readonly items = computed(() => this.quotes());
 
   /**
    * The items paired with the two things a card cannot work out for itself.
@@ -120,7 +103,7 @@ export class QuotesStore {
 
   readonly isFiltering = computed(() => this.query().trim().length > 0);
   readonly fetchedCount = computed(() => this.quotes().length);
-  readonly matchCount = computed(() => this.items().length);
+  readonly matchCount = computed(() => this.totalCount());
 
   /**
    * The four view states, derived rather than tracked. A separate `isEmpty`
@@ -130,10 +113,18 @@ export class QuotesStore {
   readonly showLoading = computed(() => this.loading() && this.quotes().length === 0);
   readonly showError = computed(() => !this.loading() && this.failure() !== null);
   readonly showEmpty = computed(
-    () => !this.loading() && this.failure() === null && this.quotes().length === 0,
+    () =>
+      !this.loading() &&
+      this.failure() === null &&
+      this.quotes().length === 0 &&
+      !this.isFiltering(),
   );
   readonly showNoMatches = computed(
-    () => !this.showLoading() && this.quotes().length > 0 && this.matchCount() === 0,
+    () =>
+      !this.showLoading() &&
+      this.isFiltering() &&
+      this.failure() === null &&
+      this.matchCount() === 0,
   );
 
   /**
@@ -168,16 +159,28 @@ export class QuotesStore {
 
   /** Fetches the current page. Every other method that changes state calls this. */
   async load(): Promise<void> {
+    const sequence = ++this.loadSequence;
     this.loading.set(true);
     this.failure.set(null);
     this.mutationFailure.set(null);
 
     try {
-      const result = await this.api.getPage(this.pageNumber(), this.pageSize());
+      const author = this.query().trim();
+      const result = author
+        ? await this.api.getPage(this.pageNumber(), this.pageSize(), author)
+        : await this.api.getPage(this.pageNumber(), this.pageSize());
+
+      if (sequence !== this.loadSequence) {
+        return;
+      }
 
       this.quotes.set(result.items);
       this.totalCount.set(result.total);
     } catch (error) {
+      if (sequence !== this.loadSequence) {
+        return;
+      }
+
       this.failure.set(toApiFailure(error));
 
       // Cleared on failure on purpose: leaving the previous page's rows on
@@ -185,7 +188,9 @@ export class QuotesStore {
       this.quotes.set([]);
       this.totalCount.set(0);
     } finally {
-      this.loading.set(false);
+      if (sequence === this.loadSequence) {
+        this.loading.set(false);
+      }
     }
   }
 
@@ -212,8 +217,15 @@ export class QuotesStore {
   }
 
   setSearch(term: string): void {
-    // No request: the filter is client-side over the page already fetched.
-    this.query.set(term);
+    const nextTerm = term.trim();
+
+    if (nextTerm === this.query()) {
+      return;
+    }
+
+    this.query.set(nextTerm);
+    this.pageNumber.set(1);
+    void this.load();
   }
 
   /**
@@ -223,12 +235,29 @@ export class QuotesStore {
    * Returning errors rather than throwing: a validation failure is an ordinary
    * outcome of a form submission, not an exception, and the caller has to handle
    * it either way.
+   *
+   * `collectionId`, when given, files the newly created quote into that
+   * collection with a second request (there is no single API call for both --
+   * see QuoteFormSubmission). A failure of that second call does not fail the
+   * create: the quote itself was made successfully, so it is reported through
+   * `actionError` rather than as a field error on a form that already worked.
    */
-  async create(request: CreateQuoteRequest): Promise<Readonly<Record<string, readonly string[]>>> {
+  async create(
+    request: CreateQuoteRequest,
+    collectionId: number | null = null,
+  ): Promise<Readonly<Record<string, readonly string[]>>> {
     this.creating.set(true);
 
     try {
-      await this.api.create(request);
+      const created = await this.api.create(request);
+
+      if (collectionId !== null) {
+        try {
+          await this.collectionsApi.addItem(collectionId, { quoteId: created.id });
+        } catch (error) {
+          this.mutationFailure.set(toApiFailure(error));
+        }
+      }
 
       // Straight to page 1 and re-fetch, rather than pushing the created quote
       // into the current page's array. The list is server-paged and server
