@@ -45,31 +45,79 @@ real transactions) and Azure Service Bus (real publish/receive over the
 `moderation-review-requests`, `curation-review-decisions` and
 `publishing-editions` subscriptions). Nothing is faked or in-memory.
 
-**What was not run in this sandbox, stated plainly rather than glossed over:**
-this environment has no reachable SQL Server instance and no Azure Service Bus
-namespace, so `happy-path.ps1` has not been executed here and its output has
-not been captured. Its correctness is by inspection — each call matches the
-endpoint contracts built in commits 8–12, and the polling steps wait on the
-real async hops rather than assuming a fixed delay. To actually run it:
+**It has still not been run, and the first version of this document was wrong
+about why.** It said the only obstacle was that this environment has no
+reachable SQL Server or Service Bus namespace. A review found four reasons it
+could not have run even with both in front of it — three of them defects in
+today's own code, all now fixed:
+
+| # | What | Where it was |
+|---|---|---|
+| 1 | Every outbox relay threw while the host was **starting** | `_owner` was built with `[..64]`, which is `Substring(0, 64)` and therefore throws whenever the string is shorter than 64. A Windows machine name is at most 15 characters, so the composed id is ~51 and it threw every time. A hosted service that throws in a field initializer takes the host down before it listens. |
+| 2 | The happy path stopped at hop 2, silently | All four modules registered their own implementation against the one shared `IIntegrationEventPublisher`. The container keeps the last registration, so Curation's submit endpoint and its `CollectionApprovedHandler` both received **Moderation's** publisher and staged their outbox row on `ModerationDbContext` — which their own `SaveChangesAsync` never saves. The row was discarded, the endpoint returned 200, and the event was never published. Moderation's own approve endpoint worked only because it happened to be the winning registration. |
+| 3 | The Service Bus topology did not exist | Nothing in this repository creates `capstone.collection-events` or its three subscriptions. `Day7/piece2/infra` provisions the namespace and the *old* topology (`quote-events` / `audit` / `search-index`). `CreateSender` resolves nothing at construction, so the relay starts cleanly and fails on the first send with `MessagingEntityNotFound`. |
+| 4 | `happy-path.ps1` could not have passed | `mark-publishable` returns the updated quote, so its response fell into the pipeline and `$quotes` held six entries instead of three; the add-item loop then added every QuoteId twice and `Collection.AddItem` refuses that with a 400. And `$collection.id.ToString("N")` was called on a `String` — `ConvertFrom-Json` does not produce a `Guid`, and `String` has no `ToString(string)` overload. |
+
+None of these was catchable by a build, and none by any test that existed.
+Which is the fifth finding, and the one that made the other four possible:
+
+**CI never built this code.** `ci.yml`'s three jobs target
+`Day5/piece2/QuotesApi.slnx` and `Day7/piece2/infra`. Six thousand lines landed
+on a pull request reporting "all checks have passed" — a green tick that was
+true about other code entirely.
+
+## What the review changed
+
+| Fix | Where |
+|---|---|
+| `BuildOwnerId()` truncates only when there is something to truncate | all four `*OutboxRelayService.cs` |
+| Each module declares and registers `I<Module>IntegrationEventPublisher`; the shared type is never registered | four new `I*IntegrationEventPublisher.cs`, four registrations, three injection sites, and the rule recorded on `IIntegrationEventPublisher` itself |
+| `TryAddSingleton` for `ServiceBusClient` — four `AddSingleton` calls for one service type produced one client, not four, and the comment claimed otherwise | four `*ModuleRegistration.cs` |
+| Migrations history table per schema — four DbContexts over one database were sharing `dbo.__EFMigrationsHistory` | four registrations + four design-time factories |
+| Retry budget counts the attempt just spent (`ClaimBatchAsync` has already incremented it) | all four relays |
+| `capstone.collection-events` and its three filtered subscriptions, provisioned | **new** `Day29/scripts/00-provision-servicebus-topology.ps1` |
+| `Out-Null` on mark-publishable; `Get-Slug` walks characters exactly as `CollectionPublishedHandler.Slugify` does, and casts to `[guid]` | `Day29/verification/happy-path.ps1` |
+| A `capstone` job that restores, builds and tests `Day22/Capstone/QuotesPlatform.slnx` | `.github/workflows/ci.yml` |
+| Composition tests: no service type registered by two modules, every hosted service constructs, each module resolves its own publisher | **new** `Day22/Capstone/tests/QuotesPlatform.CompositionTests` |
+
+The composition tests are the point. Defect 2 is now impossible to express —
+a module cannot resolve another module's publisher because it cannot see the
+type — and defect 1 is caught by constructing every hosted service, which is
+exactly what `Every_hosted_service_can_be_constructed` does and what nothing
+did before.
+
+**One migration caveat, stated because it gets worse with time.** Moving each
+module to its own `__EFMigrationsHistory` is free today only because no
+database exists yet. If one has already been created, drop it (or move that
+module's rows from `dbo.__EFMigrationsHistory` into its own schema) before the
+next `dotnet ef database update`, or EF will find no history and try to re-apply
+migrations over existing objects.
+
+**To actually run it:**
 
 ```powershell
-# Step 0 from the plan: a standing local SQL Server, and either the existing
-# Azure dev Service Bus namespace or its local emulator
+# Step 0a: the topology the code needs and nothing created
+./Day29/scripts/00-provision-servicebus-topology.ps1 -DryRun
+./Day29/scripts/00-provision-servicebus-topology.ps1
+
+# Step 0b: a standing SQL Server
 docker run -e "ACCEPT_EULA=Y" -e "MSSQL_SA_PASSWORD=<local>" -p 1433:1433 -d mcr.microsoft.com/mssql/server:2022-latest
 
 dotnet user-secrets --project Day22/Capstone/src/QuotesPlatform.Host set "ConnectionStrings:Default" "<value>"
 dotnet user-secrets --project Day22/Capstone/src/QuotesPlatform.Host set "ServiceBus:FullyQualifiedNamespace" "<value>"
 
-# Apply each module's migrations once EF is pointed at the real database, then:
+# Apply each module's migrations, then:
 dotnet run --project Day22/Capstone/src/QuotesPlatform.Host
 
 # In a second terminal:
 ./Day29/verification/happy-path.ps1 -BaseUrl https://localhost:<port>
 ```
 
-This is the same discipline Day 13's submission used when its C# changes could
-not be compiled in that environment: recording what could not be verified is
-part of the deliverable, not a gap in it.
+Recording what could not be verified is part of the deliverable — the same
+discipline Day 13's submission used. Recording it **accurately** is the part
+this round had to correct: "the sandbox has no infrastructure" was true and was
+not the whole reason, and a reason that is only partly true stops anyone
+looking for the rest.
 
 ## Deliberately deferred (named, not silently dropped)
 
