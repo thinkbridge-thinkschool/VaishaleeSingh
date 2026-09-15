@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using QuotesPlatform.Modules.Moderation.Application;
 
 namespace QuotesPlatform.Modules.Moderation.Infrastructure;
 
@@ -17,11 +18,12 @@ public static class ModerationModuleRegistration
         this IServiceCollection services,
         string connectionString)
     {
-        services.AddDbContext<ModerationDbContext>(options => options.UseSqlite(connectionString));
+        services.AddDbContext<ModerationDbContext>(options => options.UseSqlServer(connectionString));
 
-        // Repositories and use-case handlers are registered here as they are
-        // written. Day 22 is the scaffold: the boundary is what is being
-        // established today, not the feature set.
+        services.AddScoped<IReviewRepository, EfReviewRepository>();
+
+        // Use-case handlers and the outbox/messaging pieces are registered
+        // here as they are written (Day 29, commits 5 onward).
 
         return services;
     }
