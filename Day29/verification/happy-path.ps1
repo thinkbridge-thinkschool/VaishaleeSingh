@@ -16,11 +16,19 @@
     Where QuotesPlatform.Host is listening. Defaults to the local dev port.
 
 .NOTES
-    NOT RUN IN THIS SANDBOX: no reachable SQL Server or Azure Service Bus
-    namespace here, so this script's correctness is by inspection, not by a
-    captured passing run -- the same "state plainly what could not be
-    verified" discipline Day13's submission used. Run it locally per
-    Day29/docs/day29-plan.md Step 0 and Day29/docs/day29-submission.md.
+    STILL NOT RUN: this environment has no reachable SQL Server and the
+    capstone's Service Bus topology does not exist yet, so correctness here is
+    still by inspection rather than a captured passing run -- the same "state
+    plainly what could not be verified" discipline Day13's submission used.
+
+    What HAS changed: the first version of this script could not have passed
+    even against working infrastructure. It built $quotes with six entries
+    instead of three, and it called .ToString("N") on a String. Both are fixed
+    above, and both are noted where they were, because "correctness by
+    inspection" is only worth something if the inspection is recorded.
+
+    Run it per Day29/docs/day29-plan.md Step 0, after
+    Day29/scripts/00-provision-servicebus-topology.ps1.
 #>
 param(
     [string]$BaseUrl = "https://localhost:7113",
@@ -46,6 +54,40 @@ function Wait-Until {
     throw "Timed out after $TimeoutSeconds s waiting for: $Description"
 }
 
+function Get-Slug {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$CollectionId
+    )
+
+    # Character for character what CollectionPublishedHandler.Slugify does.
+    # A regex is NOT equivalent: the handler uses char.IsLetterOrDigit, which is
+    # Unicode-aware, while [^a-z0-9] is not -- so an accented collection name
+    # would give the two different answers and this script would poll a slug
+    # that never appears.
+    $builder = [System.Text.StringBuilder]::new()
+    foreach ($character in $Name.ToLowerInvariant().ToCharArray()) {
+        if ([char]::IsLetterOrDigit($character)) {
+            [void]$builder.Append($character)
+        }
+        elseif ($builder.Length -gt 0 -and $builder.ToString()[-1] -ne [char]'-') {
+            [void]$builder.Append([char]'-')
+        }
+    }
+
+    $slugified = $builder.ToString().Trim('-')
+
+    # [guid] cast is load-bearing: ConvertFrom-Json gives a String, and
+    # String has no ToString(string) overload -- the previous
+    # $collection.id.ToString("N") threw before it could be compared.
+    $shortId = ([guid]$CollectionId).ToString("N").Substring(0, 8)
+
+    $combined = if ([string]::IsNullOrEmpty($slugified)) { $shortId } else { "$slugified-$shortId" }
+
+    if ($combined.Length -gt 120) { return $combined.Substring(0, 120) }
+    return $combined
+}
+
 function Invoke-Api {
     param([string]$Method, [string]$Path, [hashtable]$Body)
 
@@ -59,7 +101,15 @@ function Invoke-Api {
 Write-Host "== Commit 8: Catalog -- submit and publish three quotes =="
 $quotes = 1..3 | ForEach-Object {
     $quote = Invoke-Api POST "/api/quotes" @{ Author = "Author $_"; Text = "Quote text number $_."; SubmittedByUserId = "curator-1" }
-    Invoke-Api POST "/api/quotes/$($quote.id)/mark-publishable" $null
+
+    # Out-Null is load-bearing: mark-publishable returns the updated quote, so
+    # without it this response ALSO lands in the pipeline and $quotes holds six
+    # entries -- each quote twice. The add-item loop below then adds every
+    # QuoteId a second time and Collection.AddItem refuses it ("This quote is
+    # already in the collection"), which is a 400 and, with $ErrorActionPreference
+    # = Stop, the end of the run.
+    Invoke-Api POST "/api/quotes/$($quote.id)/mark-publishable" $null | Out-Null
+
     Invoke-Api GET "/api/quotes/$($quote.id)"
 }
 $quotes | ForEach-Object { Write-Host "  quote $($_.id) publishable=$($_.isPublishable)" }
@@ -92,9 +142,7 @@ $edition = Wait-Until -Description "edition published for collection $($collecti
     # Slug is derived deterministically in CollectionPublishedHandler from the
     # collection's name and id -- recomputed here rather than guessed, so this
     # script breaks the same way the handler would if the two ever disagree.
-    $slugified = ($collection.name.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')
-    $shortId = $collection.id.ToString("N").Substring(0, 8)
-    $slug = "$slugified-$shortId"
+    $slug = Get-Slug -Name $collection.name -CollectionId $collection.id
 
     try { Invoke-Api GET "/api/editions/$slug" } catch { $null }
 }
