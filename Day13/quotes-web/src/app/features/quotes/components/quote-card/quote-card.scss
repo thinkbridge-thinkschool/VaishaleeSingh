@@ -40,6 +40,7 @@ app-card {
   background: transparent;
   color: #f8fbff;
   text-align: left;
+  text-decoration: none;
   cursor: pointer;
   border-radius: calc(var(--radius-md) - var(--space-2));
 }
