@@ -10,6 +10,51 @@ today's docs and verification artifact in `Day29/`.
 | This submission | `Day29/docs/day29-submission.md` |
 | Verification script | `Day29/verification/happy-path.ps1` |
 
+## Repository, branch and commit log
+
+| | |
+|---|---|
+| Repository | https://github.com/thinkbridge-thinkschool/VaishaleeSingh |
+| Branch | `day29-foundation-happy-path` |
+| Pull request | https://github.com/thinkbridge-thinkschool/VaishaleeSingh/pull/90 (into `dev`) |
+| Code | `Day22/Capstone` |
+| Docs, scripts, verification | `Day29/` |
+
+Newest first. The first thirteen built the happy path; everything above them
+is the review round (see "What the review changed"). The listing below is a
+snapshot — the command underneath it is the source of truth, and it will
+include this commit and anything after it:
+
+```
+1ebcb12 docs(day29): record what the review found, and correct what this claimed
+e40fbb9 fix(day29): the happy-path script could not have passed
+cb8dc9e feat(day29): provision the Service Bus topology the capstone needs
+2a456aa ci: build and test the capstone solution
+36dfa58 test(capstone): cover the container the Host actually builds
+0c836f8 fix(composition): one Service Bus client, and a migrations history table per schema
+9fbe1e3 fix(di): give each module its own outbox publisher port
+11549ad fix(outbox): the relays could not start, and the retry budget was off by one
+a1582e7 docs(day29): submission + happy-path verification script
+9244020 feat(publishing): build the edition from the event, expose it (happy path hop 5)
+5d06a5b feat(curation): apply Moderation's approval, publish the edition (happy path hop 4)
+a54eb8d feat(moderation): open review on submission, approve endpoint (happy path hop 3)
+c43c1e6 feat(curation): create, add item, submit endpoints (happy path hop 2)
+2c52a7e feat(catalog): submit + mark-publishable endpoints (happy path hop 1)
+36d6c00 feat(consumers): Service Bus consumer host + idempotency per subscribing module
+2e94d86 feat(outbox): relay to Azure Service Bus per module
+6948b7d feat(outbox): shared outbox shape, one table per module schema
+6ccf835 feat(publishing): EF configuration, SQL Server migration and repository for Edition
+2940868 feat(moderation): EF configuration, SQL Server migration and repository for Review
+0b00b45 feat(catalog): EF configuration, SQL Server migration and repository for Quote
+7966602 feat(curation): EF configurations, SQL Server migration and repository for Collection
+```
+
+Regenerate with:
+
+```bash
+git log --oneline origin/dev..day29-foundation-happy-path
+```
+
 ## What today closed
 
 Day 22 scaffolded the capstone and deliberately built nothing that runs. Today
@@ -118,6 +163,115 @@ discipline Day 13's submission used. Recording it **accurately** is the part
 this round had to correct: "the sandbox has no infrastructure" was true and was
 not the whole reason, and a reason that is only partly true stops anyone
 looking for the rest.
+
+## Showing the happy path working
+
+Two ways, and the second is the one to record.
+
+### The one-command version
+
+```powershell
+./Day29/scripts/00-provision-servicebus-topology.ps1     # once per namespace
+dotnet run --project Day22/Capstone/src/QuotesPlatform.Host
+# second terminal:
+./Day29/verification/happy-path.ps1 -BaseUrl https://localhost:<port>
+```
+
+It prints every hop as it happens and ends with the edition, its number, its
+slug and its three items. That transcript is the evidence; save it as
+`Day29/verification/happy-path-run.txt`.
+
+### The walkthrough, hop by hop
+
+Nine calls. Each one crosses a boundary the previous one did not, and the two
+waits are real: nothing here polls a fake.
+
+```bash
+BASE=https://localhost:7113          # -k because it is the dev certificate
+
+# ---- hop 1: Catalog. Submit a quote, then mark it publishable. -------------
+curl -sk -X POST $BASE/api/quotes -H 'Content-Type: application/json' \
+  -d '{"author":"Author 1","text":"Quote text number 1.","submittedByUserId":"curator-1"}'
+curl -sk -X POST $BASE/api/quotes/<quoteId>/mark-publishable
+# repeat for quotes 2 and 3 -- Collection.MinItemsToPublish is 3
+
+# ---- hop 2: Curation. Create, fill, submit. The FIRST outbox write. --------
+curl -sk -X POST $BASE/api/collections -H 'Content-Type: application/json' \
+  -d '{"name":"Day 29 happy path","ownerId":"curator-1"}'
+
+curl -sk -X POST $BASE/api/collections/<collectionId>/items -H 'Content-Type: application/json' \
+  -d '{"quoteId":"<quoteId>","author":"Author 1","text":"Quote text number 1.","isPublishable":true,"actorId":"curator-1"}'
+# x3
+
+curl -sk -X POST $BASE/api/collections/<collectionId>/submit -H 'Content-Type: application/json' \
+  -d '{"actorId":"curator-1"}'
+# -> state: "PendingReview". Nothing else has happened YET.
+
+# ---- hop 3: Moderation, reached only through the broker. -------------------
+# Wait. Curation's relay claims the outbox row, publishes it to
+# capstone.collection-events, Moderation's consumer receives it on
+# moderation-review-requests and opens a Review. A few seconds.
+curl -sk $BASE/api/reviews/by-subject/<collectionId>
+# -> a review with outcome "Pending". THIS 200 is the proof the async hop ran.
+
+curl -sk -X POST $BASE/api/reviews/<reviewId>/approve -H 'Content-Type: application/json' \
+  -d '{"reviewerId":"reviewer-1"}'
+
+# ---- hops 4 and 5: back across the broker, twice. -------------------------
+# Curation receives CollectionApproved, applies it, publishes the fat
+# CollectionPublished; Publishing receives it and builds the Edition from the
+# payload alone.
+curl -sk $BASE/api/collections/<collectionId>
+# -> state: "Published", editionNumber: 1
+
+curl -sk $BASE/api/editions/day-29-happy-path-<first8OfCollectionId>
+# -> the edition, with its three items in position order
+```
+
+**What makes this a walkthrough rather than a demo:** the two waits are the
+only way hops 3, 4 and 5 can happen. There is no synchronous call between
+modules anywhere in this code — Publishing does not even hold a reference to
+Curation — so an edition appearing at the last URL cannot be explained by
+anything except the outbox relay, Service Bus, and two consumers having
+actually run.
+
+### The infrastructure half, worth one screenshot each
+
+```sql
+-- rows written in the same transaction as the domain change, then relayed
+SELECT Id, EventType, Status, Attempts, SentAtUtc FROM curation.OutboxMessages ORDER BY Id;
+SELECT Id, EventType, Status, SentAtUtc            FROM moderation.OutboxMessages ORDER BY Id;
+
+-- the consumer-side dedupe key, one row per (message, subscription)
+SELECT * FROM moderation.ProcessedMessages;
+SELECT * FROM curation.ProcessedMessages;
+SELECT * FROM publishing.ProcessedMessages;
+```
+
+Every outbox row should read `Sent`. In the portal, the three subscriptions
+under `capstone.collection-events` should show a zero active message count and
+a non-zero total — delivered and completed, nothing dead-lettered.
+
+### Recording the clip
+
+Sixty to ninety seconds is enough, and the terminal is the better subject than
+a browser: the waits are the story.
+
+- **Windows:** `Win` + `Alt` + `R` (Xbox Game Bar) records the focused window
+  to `%USERPROFILE%\Videos\Captures`. No install.
+- **A GIF instead:** ShareX → Capture → Screen recording (GIF). Smaller, and it
+  plays inline in a pull request.
+
+Run `happy-path.ps1` in the foreground with the Host's log visible beside it if
+the terminal is wide enough — the relay and consumer log lines landing between
+the two waits are what a reviewer wants to see. Save it as
+`Day29/verification/happy-path.gif` (or `.mp4`) and link it here.
+
+> **Not captured yet.** The run and the clip are still outstanding: this
+> environment has no reachable SQL Server and the topology has not been
+> provisioned. Replace this block with the transcript and the clip once it has
+> run — and if a hop fails, that failure is worth pasting too, since a run
+> nobody can see is the position this submission started in.
 
 ## Deliberately deferred (named, not silently dropped)
 
