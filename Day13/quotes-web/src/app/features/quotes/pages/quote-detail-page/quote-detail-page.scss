@@ -30,6 +30,10 @@
   }
 }
 
+.quote-detail__actions {
+  margin-bottom: var(--space-5);
+}
+
 .quote-detail {
   display: flex;
   flex-direction: column;
