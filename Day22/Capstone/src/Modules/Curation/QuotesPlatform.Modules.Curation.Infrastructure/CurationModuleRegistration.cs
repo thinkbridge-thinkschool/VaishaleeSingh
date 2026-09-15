@@ -1,3 +1,5 @@
+using Azure.Identity;
+using Azure.Messaging.ServiceBus;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using QuotesPlatform.Contracts;
@@ -17,15 +19,23 @@ public static class CurationModuleRegistration
 {
     public static IServiceCollection AddCurationModule(
         this IServiceCollection services,
-        string connectionString)
+        string connectionString,
+        string serviceBusFullyQualifiedNamespace)
     {
         services.AddDbContext<CurationDbContext>(options => options.UseSqlServer(connectionString));
 
         services.AddScoped<ICollectionRepository, EfCollectionRepository>();
         services.AddScoped<IIntegrationEventPublisher, EfOutboxIntegrationEventPublisher>();
 
-        // Use-case handlers and the relay/consumer messaging pieces are
-        // registered here as they are written (Day 29, commits 6 onward).
+        // One client per module rather than one shared client -- keeps a
+        // module's messaging concern inside its own registration, the same
+        // way its DbContext is not shared with any other module.
+        services.AddSingleton(_ =>
+            new ServiceBusClient(serviceBusFullyQualifiedNamespace, new DefaultAzureCredential()));
+        services.AddHostedService<CurationOutboxRelayService>();
+
+        // Use-case handlers and the consumer messaging pieces are registered
+        // here as they are written (Day 29, commit 7 onward).
 
         return services;
     }

@@ -20,10 +20,19 @@ if (string.IsNullOrWhiteSpace(connectionString))
     throw new InvalidOperationException(
         "ConnectionStrings:Default is not set. Supply it via user-secrets or environment configuration.");
 
-builder.Services.AddCatalogModule(connectionString);
-builder.Services.AddCurationModule(connectionString);
-builder.Services.AddPublishingModule(connectionString);
-builder.Services.AddModerationModule(connectionString);
+// The Service Bus namespace every module's outbox relay publishes to and every
+// consumer reads from -- see QuotesPlatform.Contracts.ServiceBusTopology.
+// Authenticated with DefaultAzureCredential inside each module's
+// registration, never a connection string with a key.
+var serviceBusNamespace = builder.Configuration["ServiceBus:FullyQualifiedNamespace"];
+if (string.IsNullOrWhiteSpace(serviceBusNamespace))
+    throw new InvalidOperationException(
+        "ServiceBus:FullyQualifiedNamespace is not set. Supply it via user-secrets or environment configuration.");
+
+builder.Services.AddCatalogModule(connectionString, serviceBusNamespace);
+builder.Services.AddCurationModule(connectionString, serviceBusNamespace);
+builder.Services.AddPublishingModule(connectionString, serviceBusNamespace);
+builder.Services.AddModerationModule(connectionString, serviceBusNamespace);
 
 var app = builder.Build();
 
