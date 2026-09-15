@@ -2,6 +2,9 @@
 
 .grid {
   display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
   gap: var(--space-6);
 
   // Mobile-first, and every column is minmax(0, 1fr) rather than 1fr: a grid
