@@ -4,7 +4,6 @@
 
     @if (isRequired()) {
       <span class="field__required" aria-hidden="true">*</span>
-      <span class="u-visually-hidden">(required)</span>
     }
   </label>
 
@@ -17,6 +16,7 @@
     [formControl]="control()"
     [attr.placeholder]="placeholder() || null"
     [attr.maxlength]="maxLength()"
+    [attr.aria-required]="isRequired() ? 'true' : null"
     [attr.aria-describedby]="describedBy()"
     [attr.aria-invalid]="hasError() ? 'true' : null"
   ></textarea>

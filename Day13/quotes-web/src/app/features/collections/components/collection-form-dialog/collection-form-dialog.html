@@ -11,12 +11,10 @@
       placeholder="Stoics worth rereading"
       [control]="form.controls.name"
       [maxLength]="limits.nameMaxLength"
-      [hint]="'Up to ' + limits.nameMaxLength + ' characters. Holds up to ' + limits.maxItems + ' quotes.'"
+      [hint]="
+        'Up to ' + limits.nameMaxLength + ' characters. Holds up to ' + limits.maxItems + ' quotes.'
+      "
     />
-
-    <button type="submit" class="u-visually-hidden" [attr.aria-hidden]="true" tabindex="-1">
-      Create collection
-    </button>
   </form>
 
   <ng-container ngProjectAs="[modalFooter]">
