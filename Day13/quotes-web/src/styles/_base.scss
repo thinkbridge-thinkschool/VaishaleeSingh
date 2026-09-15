@@ -155,10 +155,16 @@ blockquote {
     box-shadow var(--duration-fast) var(--ease-out);
 
   &:focus {
-    top: var(--space-3);
+    top: calc(7rem + var(--space-3));
     color: var(--color-on-primary);
     background: var(--color-primary-hover);
     box-shadow: var(--shadow-lg);
+  }
+
+  @include md {
+    &:focus {
+      top: calc(var(--header-height) + var(--space-3));
+    }
   }
 
   &:focus-visible {
