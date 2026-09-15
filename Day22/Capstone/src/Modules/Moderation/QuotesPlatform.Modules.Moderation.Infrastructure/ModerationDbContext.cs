@@ -27,6 +27,9 @@ public sealed class ModerationDbContext(DbContextOptions<ModerationDbContext> op
     /// <summary>Written in the same transaction as a Review change -- see EfOutboxIntegrationEventPublisher.</summary>
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
 
+    /// <summary>Consumer-side idempotency for ModerationServiceBusConsumerHost.</summary>
+    public DbSet<ProcessedMessage> ProcessedMessages => Set<ProcessedMessage>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasDefaultSchema(Schema);

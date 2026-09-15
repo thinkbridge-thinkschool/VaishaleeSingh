@@ -27,6 +27,9 @@ public sealed class CurationDbContext(DbContextOptions<CurationDbContext> option
     /// <summary>Written in the same transaction as a Collection change -- see EfOutboxIntegrationEventPublisher.</summary>
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
 
+    /// <summary>Consumer-side idempotency for CurationServiceBusConsumerHost.</summary>
+    public DbSet<ProcessedMessage> ProcessedMessages => Set<ProcessedMessage>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasDefaultSchema(Schema);

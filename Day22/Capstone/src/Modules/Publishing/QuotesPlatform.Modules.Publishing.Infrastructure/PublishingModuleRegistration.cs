@@ -30,9 +30,10 @@ public static class PublishingModuleRegistration
         services.AddSingleton(_ =>
             new ServiceBusClient(serviceBusFullyQualifiedNamespace, new DefaultAzureCredential()));
         services.AddHostedService<PublishingOutboxRelayService>();
+        services.AddHostedService<PublishingServiceBusConsumerHost>();
 
-        // Use-case handlers and the consumer messaging pieces are registered
-        // here as they are written (Day 29, commit 7 onward).
+        // Use-case handlers are registered here, keyed by integration event
+        // type, as they are written (Day 29, commit 12 onward).
 
         return services;
     }

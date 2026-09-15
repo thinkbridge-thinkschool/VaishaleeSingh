@@ -119,6 +119,26 @@ namespace QuotesPlatform.Modules.Moderation.Infrastructure.Migrations
 
                     b.ToTable("OutboxMessages", "moderation");
                 });
+
+            modelBuilder.Entity("QuotesPlatform.SharedKernel.ProcessedMessage", b =>
+                {
+                    b.Property<string>("MessageId")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("SubscriptionName")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTime>("ProcessedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("MessageId", "SubscriptionName");
+
+                    b.HasIndex("ProcessedAtUtc");
+
+                    b.ToTable("ProcessedMessages", "moderation");
+                });
 #pragma warning restore 612, 618
         }
     }

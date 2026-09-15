@@ -27,6 +27,9 @@ public sealed class PublishingDbContext(DbContextOptions<PublishingDbContext> op
     /// <summary>Written in the same transaction as an Edition change -- see EfOutboxIntegrationEventPublisher.</summary>
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
 
+    /// <summary>Consumer-side idempotency for PublishingServiceBusConsumerHost.</summary>
+    public DbSet<ProcessedMessage> ProcessedMessages => Set<ProcessedMessage>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasDefaultSchema(Schema);

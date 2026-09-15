@@ -3,34 +3,37 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
-using QuotesPlatform.Modules.Curation.Infrastructure;
+using QuotesPlatform.Modules.Publishing.Infrastructure;
 
 #nullable disable
 
-namespace QuotesPlatform.Modules.Curation.Infrastructure.Migrations
+namespace QuotesPlatform.Modules.Publishing.Infrastructure.Migrations
 {
-    [DbContext(typeof(CurationDbContext))]
-    partial class CurationDbContextModelSnapshot : ModelSnapshot
+    [DbContext(typeof(PublishingDbContext))]
+    [Migration("20260915111629_AddProcessedMessages")]
+    partial class AddProcessedMessages
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasDefaultSchema("curation")
+                .HasDefaultSchema("publishing")
                 .HasAnnotation("ProductVersion", "10.0.10")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
-            modelBuilder.Entity("QuotesPlatform.Modules.Curation.Domain.Collection", b =>
+            modelBuilder.Entity("QuotesPlatform.Modules.Publishing.Domain.Edition", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("datetimeoffset");
+                    b.Property<Guid>("CollectionId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<int>("EditionNumber")
                         .HasColumnType("int");
@@ -44,14 +47,22 @@ namespace QuotesPlatform.Modules.Curation.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
-                    b.Property<string>("State")
+                    b.Property<DateTimeOffset>("PublishedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Slug")
                         .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("nvarchar(20)");
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
 
                     b.HasKey("Id");
 
-                    b.ToTable("Collections", "curation");
+                    b.HasIndex("Slug");
+
+                    b.HasIndex("CollectionId", "EditionNumber")
+                        .IsUnique();
+
+                    b.ToTable("Editions", "publishing");
                 });
 
             modelBuilder.Entity("QuotesPlatform.SharedKernel.OutboxMessage", b =>
@@ -109,7 +120,7 @@ namespace QuotesPlatform.Modules.Curation.Infrastructure.Migrations
 
                     b.HasIndex("Status", "LockedUntilUtc");
 
-                    b.ToTable("OutboxMessages", "curation");
+                    b.ToTable("OutboxMessages", "publishing");
                 });
 
             modelBuilder.Entity("QuotesPlatform.SharedKernel.ProcessedMessage", b =>
@@ -129,33 +140,23 @@ namespace QuotesPlatform.Modules.Curation.Infrastructure.Migrations
 
                     b.HasIndex("ProcessedAtUtc");
 
-                    b.ToTable("ProcessedMessages", "curation");
+                    b.ToTable("ProcessedMessages", "publishing");
                 });
 
-            modelBuilder.Entity("QuotesPlatform.Modules.Curation.Domain.Collection", b =>
+            modelBuilder.Entity("QuotesPlatform.Modules.Publishing.Domain.Edition", b =>
                 {
-                    b.OwnsMany("QuotesPlatform.Modules.Curation.Domain.CollectionItem", "Items", b1 =>
+                    b.OwnsMany("QuotesPlatform.Modules.Publishing.Domain.EditionItem", "Items", b1 =>
                         {
-                            b1.Property<Guid>("Id")
-                                .ValueGeneratedOnAdd()
+                            b1.Property<Guid>("EditionId")
                                 .HasColumnType("uniqueidentifier");
 
-                            b1.Property<DateTimeOffset>("AddedAt")
-                                .HasColumnType("datetimeoffset");
+                            b1.Property<int>("Position")
+                                .HasColumnType("int");
 
                             b1.Property<string>("Author")
                                 .IsRequired()
                                 .HasMaxLength(200)
                                 .HasColumnType("nvarchar(200)");
-
-                            b1.Property<Guid>("CollectionId")
-                                .HasColumnType("uniqueidentifier");
-
-                            b1.Property<bool>("IsPublishable")
-                                .HasColumnType("bit");
-
-                            b1.Property<int>("Position")
-                                .HasColumnType("int");
 
                             b1.Property<Guid>("QuoteId")
                                 .HasColumnType("uniqueidentifier");
@@ -165,49 +166,15 @@ namespace QuotesPlatform.Modules.Curation.Infrastructure.Migrations
                                 .HasMaxLength(1000)
                                 .HasColumnType("nvarchar(1000)");
 
-                            b1.HasKey("Id");
+                            b1.HasKey("EditionId", "Position");
 
-                            b1.HasIndex("CollectionId", "QuoteId")
-                                .IsUnique();
-
-                            b1.ToTable("CollectionItems", "curation");
+                            b1.ToTable("EditionItems", "publishing");
 
                             b1.WithOwner()
-                                .HasForeignKey("CollectionId");
-                        });
-
-                    b.OwnsMany("QuotesPlatform.Modules.Curation.Domain.CollectionMember", "Members", b1 =>
-                        {
-                            b1.Property<Guid>("Id")
-                                .ValueGeneratedOnAdd()
-                                .HasColumnType("uniqueidentifier");
-
-                            b1.Property<Guid>("CollectionId")
-                                .HasColumnType("uniqueidentifier");
-
-                            b1.Property<string>("Role")
-                                .IsRequired()
-                                .HasMaxLength(20)
-                                .HasColumnType("nvarchar(20)");
-
-                            b1.Property<string>("UserId")
-                                .IsRequired()
-                                .HasColumnType("nvarchar(450)");
-
-                            b1.HasKey("Id");
-
-                            b1.HasIndex("CollectionId", "UserId")
-                                .IsUnique();
-
-                            b1.ToTable("CollectionMembers", "curation");
-
-                            b1.WithOwner()
-                                .HasForeignKey("CollectionId");
+                                .HasForeignKey("EditionId");
                         });
 
                     b.Navigation("Items");
-
-                    b.Navigation("Members");
                 });
 #pragma warning restore 612, 618
         }
