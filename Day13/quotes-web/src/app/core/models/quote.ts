@@ -53,7 +53,11 @@ export function resolveQuoteBackgroundUrl(url: string, apiBaseUrl: string): stri
     return url;
   }
 
-  const assetUrl = url.startsWith('/quote-backgrounds/') ? url.replace(/\.webp$/i, '.jpg') : url;
+  const assetUrl = url.startsWith('/quote-backgrounds/')
+    ? apiBaseUrl
+      ? url.replace(/\.webp$/i, '.jpg')
+      : url.replace(/\.jpg$/i, '.webp')
+    : url;
 
   return assetUrl.startsWith('/') ? `${apiBaseUrl}${assetUrl}` : assetUrl;
 }
