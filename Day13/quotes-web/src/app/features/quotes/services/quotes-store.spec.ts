@@ -5,7 +5,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_QUOTE_BACKGROUND_URL, PagedResult, Quote } from '../../../core/models/quote';
 import { AuthStore } from '../../../core/services/auth-store';
-import { CollectionsApi } from '../../../core/services/collections-api';
 import { QuotesApi } from '../../../core/services/quotes-api';
 import { QuotesStore } from './quotes-store';
 

@@ -155,7 +155,11 @@ export class QuotesPage implements OnInit {
     // collectionId is dropped rather than sent: the edit form hides the field
     // (see QuoteFormDialog), and PUT /api/quotes/{id} has no such field to
     // accept it on.
-    const { collectionId: _collectionId, ...request } = submission;
+    const request = {
+      author: submission.author,
+      text: submission.text,
+      backgroundImageUrl: submission.backgroundImageUrl,
+    };
     const fieldErrors = await this.store.update(quote.id, request);
     this.editFieldErrors.set(fieldErrors);
 
