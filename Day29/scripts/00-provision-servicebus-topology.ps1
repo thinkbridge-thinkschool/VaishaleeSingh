@@ -150,7 +150,7 @@ if (-not $topicExists) {
         '--max-size', '1024',
         '--enable-duplicate-detection', 'false',
         '-o', 'none') | Out-Null
-    Write-Host "  created $TopicName"
+    Write-Host $(if ($DryRun) { "  would create $TopicName" } else { "  created $TopicName" })
 }
 else {
     Write-Host "  $TopicName already exists"
@@ -176,7 +176,7 @@ foreach ($name in $subscriptions.Keys) {
             '--dead-letter-on-message-expiration', 'true',
             '--lock-duration', 'PT1M',
             '-o', 'none') | Out-Null
-        Write-Host "  created $name"
+        Write-Host $(if ($DryRun) { "  would create $name" } else { "  created $name" })
     }
     else {
         Write-Host "  $name already exists"
