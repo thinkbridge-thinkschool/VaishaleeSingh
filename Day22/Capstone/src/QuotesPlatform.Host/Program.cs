@@ -41,5 +41,6 @@ var app = builder.Build();
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
 app.MapCatalogEndpoints();
+app.MapCurationEndpoints();
 
 app.Run();
