@@ -127,50 +127,9 @@ blockquote {
   }
 }
 
-// Skip link and screen-reader-only text.
+// Screen-reader-only text.
 .u-visually-hidden {
   @include visually-hidden;
-}
-
-.u-skip-link {
-  position: absolute;
-  left: var(--space-4);
-  top: -3rem;
-  z-index: calc(var(--z-modal) + 1);
-  display: inline-flex;
-  align-items: center;
-  min-height: 2.75rem;
-  padding: 0 var(--space-4);
-  background: var(--color-primary);
-  color: var(--color-on-primary);
-  border: 2px solid var(--color-primary);
-  border-radius: var(--radius-pill);
-  box-shadow: var(--shadow-md);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  text-decoration: none;
-  transition:
-    top var(--duration-fast) var(--ease-out),
-    background-color var(--duration-fast) var(--ease-out),
-    box-shadow var(--duration-fast) var(--ease-out);
-
-  &:focus {
-    top: calc(7rem + var(--space-3));
-    color: var(--color-on-primary);
-    background: var(--color-primary-hover);
-    box-shadow: var(--shadow-lg);
-  }
-
-  @include md {
-    &:focus {
-      top: calc(var(--header-height) + var(--space-3));
-    }
-  }
-
-  &:focus-visible {
-    outline: 3px solid var(--color-primary-ring);
-    outline-offset: 3px;
-  }
 }
 
 // Set by Modal while a dialog is open. Global rather than component-scoped
