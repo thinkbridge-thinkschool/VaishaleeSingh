@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using QuotesPlatform.Modules.Curation.Application;
 
 namespace QuotesPlatform.Modules.Curation.Infrastructure;
 
@@ -17,11 +18,12 @@ public static class CurationModuleRegistration
         this IServiceCollection services,
         string connectionString)
     {
-        services.AddDbContext<CurationDbContext>(options => options.UseSqlite(connectionString));
+        services.AddDbContext<CurationDbContext>(options => options.UseSqlServer(connectionString));
 
-        // Repositories and use-case handlers are registered here as they are
-        // written. Day 22 is the scaffold: the boundary is what is being
-        // established today, not the feature set.
+        services.AddScoped<ICollectionRepository, EfCollectionRepository>();
+
+        // Use-case handlers and the outbox/messaging pieces are registered
+        // here as they are written (Day 29, commits 5 onward).
 
         return services;
     }

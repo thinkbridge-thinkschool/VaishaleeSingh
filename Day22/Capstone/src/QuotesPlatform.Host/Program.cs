@@ -12,8 +12,13 @@ var builder = WebApplication.CreateBuilder(args);
 // starts registering repositories or mapping endpoints for a module, the
 // module has stopped owning its own composition and the Host has become the
 // place where everything is known.
-var connectionString = builder.Configuration.GetConnectionString("Default")
-    ?? "Data Source=quotesplatform.db";
+// A real SQL Server, not a default -- see appsettings.json for how to supply
+// it via user-secrets. Failing fast here is cheaper than a module discovering
+// it has no connection string the first time an endpoint touches its DbContext.
+var connectionString = builder.Configuration.GetConnectionString("Default");
+if (string.IsNullOrWhiteSpace(connectionString))
+    throw new InvalidOperationException(
+        "ConnectionStrings:Default is not set. Supply it via user-secrets or environment configuration.");
 
 builder.Services.AddCatalogModule(connectionString);
 builder.Services.AddCurationModule(connectionString);
