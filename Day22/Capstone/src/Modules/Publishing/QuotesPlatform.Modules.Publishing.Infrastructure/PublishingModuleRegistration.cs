@@ -32,8 +32,7 @@ public static class PublishingModuleRegistration
         services.AddHostedService<PublishingOutboxRelayService>();
         services.AddHostedService<PublishingServiceBusConsumerHost>();
 
-        // Use-case handlers are registered here, keyed by integration event
-        // type, as they are written (Day 29, commit 12 onward).
+        services.AddKeyedScoped<IIntegrationEventHandler, CollectionPublishedHandler>(nameof(CollectionPublished));
 
         return services;
     }

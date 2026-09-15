@@ -16,6 +16,13 @@ public sealed class EfEditionRepository(PublishingDbContext db) : IEditionReposi
             .Include(e => e.Items)
             .FirstOrDefaultAsync(e => e.Id == id, cancellationToken);
 
+    public Task<Edition?> GetLatestBySlugAsync(string slug, CancellationToken cancellationToken = default) =>
+        db.Editions
+            .Include(e => e.Items)
+            .Where(e => e.Slug == slug)
+            .OrderByDescending(e => e.EditionNumber)
+            .FirstOrDefaultAsync(cancellationToken);
+
     public Task AddAsync(Edition aggregate, CancellationToken cancellationToken = default)
     {
         db.Editions.Add(aggregate);
