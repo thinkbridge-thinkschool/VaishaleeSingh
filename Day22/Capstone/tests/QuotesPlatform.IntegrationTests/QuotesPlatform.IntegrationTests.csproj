@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The first tests in this solution that RUN a handler. Everything before
+       them proved handlers were registered, keyed and constructible; none
+       proved one does what it says against a real database. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Modules\Catalog\QuotesPlatform.Modules.Catalog.Infrastructure\QuotesPlatform.Modules.Catalog.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Curation\QuotesPlatform.Modules.Curation.Infrastructure\QuotesPlatform.Modules.Curation.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Moderation\QuotesPlatform.Modules.Moderation.Infrastructure\QuotesPlatform.Modules.Moderation.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Publishing\QuotesPlatform.Modules.Publishing.Infrastructure\QuotesPlatform.Modules.Publishing.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentAssertions" Version="7.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.10" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="Testcontainers.MsSql" Version="4.1.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>
