@@ -1,9 +1,20 @@
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using QuotesPlatform.Contracts;
+using QuotesPlatform.Modules.Catalog.Infrastructure;
+using QuotesPlatform.Modules.Curation.Infrastructure;
+using QuotesPlatform.Modules.Moderation.Infrastructure;
+using QuotesPlatform.Modules.Publishing.Infrastructure;
 using CurationHandler = QuotesPlatform.Modules.Curation.Infrastructure.IIntegrationEventHandler;
 using ModerationHandler = QuotesPlatform.Modules.Moderation.Infrastructure.IIntegrationEventHandler;
 using PublishingHandler = QuotesPlatform.Modules.Publishing.Infrastructure.IIntegrationEventHandler;
+
+// The four namespace imports above bring in AddCatalogModule and friends.
+// The three aliases stay because each module declares its OWN
+// IIntegrationEventHandler in its own namespace, so the bare name is ambiguous
+// the moment more than one of those namespaces is imported -- which is the
+// module boundary working exactly as intended, and the reason a test spanning
+// all four modules has to name them apart.
 
 namespace QuotesPlatform.CompositionTests;
 
