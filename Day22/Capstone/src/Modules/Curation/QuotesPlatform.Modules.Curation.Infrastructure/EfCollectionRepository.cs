@@ -17,6 +17,15 @@ public sealed class EfCollectionRepository(CurationDbContext db) : ICollectionRe
             .Include(c => c.Members)
             .FirstOrDefaultAsync(c => c.Id == id, cancellationToken);
 
+    public async Task<IReadOnlyList<Collection>> GetEditableByQuoteIdAsync(
+        Guid quoteId, CancellationToken cancellationToken = default) =>
+        await db.Collections
+            .Include(c => c.Items)
+            .Include(c => c.Members)
+            .Where(c => (c.State == CollectionState.Draft || c.State == CollectionState.Revising)
+                && c.Items.Any(i => i.QuoteId == quoteId))
+            .ToListAsync(cancellationToken);
+
     public Task AddAsync(Collection aggregate, CancellationToken cancellationToken = default)
     {
         db.Collections.Add(aggregate);

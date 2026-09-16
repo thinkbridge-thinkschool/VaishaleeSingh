@@ -22,6 +22,26 @@ public interface IReviewRepository
     /// </summary>
     Task<Review?> GetPendingBySubjectAsync(ReviewSubject subject, Guid subjectId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// The most recent review for a subject whatever its outcome.
+    ///
+    /// This exists because of a hole the rejection path opened. Curation's
+    /// Collection.Reject takes the reason, raises a domain event with it, and
+    /// stores it nowhere durable -- so after a rejection, GET
+    /// /api/collections/{id} shows a Draft with no indication why, and
+    /// GetPendingBySubjectAsync cannot help because the review that carries
+    /// the reason is decided, not pending.
+    ///
+    /// The alternative was to copy the reason into Curation's aggregate. That
+    /// was rejected deliberately: a decision and its grounds belong to the
+    /// module that made them, and the first copy of a reviewer's words into a
+    /// curator's aggregate is the beginning of Curation growing a reviewer
+    /// concept it has no business owning. The cost is that a client wanting
+    /// "why was this rejected" makes two calls, which is the correct cost to
+    /// pay at a module boundary.
+    /// </summary>
+    Task<Review?> GetLatestBySubjectAsync(ReviewSubject subject, Guid subjectId, CancellationToken cancellationToken = default);
+
     Task AddAsync(Review aggregate, CancellationToken cancellationToken = default);
 
     /// <summary>
