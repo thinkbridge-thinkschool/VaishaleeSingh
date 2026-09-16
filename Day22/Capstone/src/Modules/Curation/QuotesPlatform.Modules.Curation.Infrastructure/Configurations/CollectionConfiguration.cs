@@ -44,6 +44,25 @@ public sealed class CollectionConfiguration : IEntityTypeConfiguration<Collectio
             item.WithOwner().HasForeignKey("CollectionId");
             item.HasKey(i => i.Id);
 
+            // WHY ValueGeneratedNever. The domain sets Id in the constructor;
+            // the store never generates it. Saying so is not a formality --
+            // without it EF treats a Guid key as store-generated, and then a
+            // key that already has a value can only mean "this row exists".
+            //
+            // That inference is right when the owner is Added, because EF
+            // cascades Added to its owned children and inserts them. It is
+            // wrong when the owner was LOADED: the owner is Unchanged, EF
+            // decides the child's state on its own, sees a populated key, and
+            // issues an UPDATE for a row that was never inserted. SQL Server
+            // reports zero rows affected and EF raises
+            // DbUpdateConcurrencyException -- "expected to affect 1 row(s),
+            // but actually affected 0" -- which reads like a concurrency
+            // problem and is really an insert that turned into an update.
+            //
+            // Creating the aggregate therefore worked and adding to it did
+            // not, from identical configuration. Found by running it.
+            item.Property(i => i.Id).ValueGeneratedNever();
+
             item.Property(i => i.QuoteId).IsRequired();
             item.Property(i => i.Author).IsRequired().HasMaxLength(200);
             item.Property(i => i.Text).IsRequired().HasMaxLength(1000);
@@ -61,6 +80,10 @@ public sealed class CollectionConfiguration : IEntityTypeConfiguration<Collectio
             member.ToTable("CollectionMembers");
             member.WithOwner().HasForeignKey("CollectionId");
             member.HasKey(m => m.Id);
+
+            // Same reason as Items above: a client-set key on a loaded owner
+            // becomes an UPDATE of a row that was never inserted.
+            member.Property(m => m.Id).ValueGeneratedNever();
 
             member.Property(m => m.UserId).IsRequired();
             member.Property(m => m.Role).IsRequired().HasConversion<string>().HasMaxLength(20);
