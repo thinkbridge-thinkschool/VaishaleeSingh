@@ -105,10 +105,18 @@ never ships" — that argument is true here and is also how advisories
 accumulate. The pre-existing `SQLitePCLRaw` NU1903 in `Day7/piece2` is
 untouched and remains Day 28's item.
 
-**Still not covered:** Service Bus itself — filters, subscriptions, delivery,
-dead-lettering. All three failures that have cost this project real time live
-in that gap and none is catchable by these tests, which is why
-`happy-path.ps1` against the live namespace remains part of the deliverable.
+- **Run end to end against live infrastructure**, all three flows, after
+  everything above landed: `Day30/verification/feature-complete-run.txt`. SQL
+  Server in Docker plus the dev Service Bus namespace, with
+  `catalog-quote-decisions` created by that run. The integration tests stop at
+  the handler boundary by design, so this transcript is the only evidence that
+  covers filters, subscriptions and delivery — where every failure that has
+  cost this project real time has actually lived.
+
+**Still not covered:** the rejection path and revision loop are exercised by
+the integration tests but not by the live script; a scripted
+reject-and-resubmit against real infrastructure is the obvious next addition.
+Dead-lettering is unobserved either way.
 
 ## Reviewing this
 
