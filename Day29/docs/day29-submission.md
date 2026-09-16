@@ -277,11 +277,58 @@ the terminal is wide enough — the relay and consumer log lines landing between
 the two waits are what a reviewer wants to see. Save it as
 `Day29/verification/happy-path.gif` (or `.mp4`) and link it here.
 
-> **Not captured yet.** The run and the clip are still outstanding: this
-> environment has no reachable SQL Server and the topology has not been
-> provisioned. Replace this block with the transcript and the clip once it has
-> run — and if a hop fails, that failure is worth pasting too, since a run
-> nobody can see is the position this submission started in.
+### It has now run
+
+Transcript: [`Day29/verification/happy-path-run.txt`](../verification/happy-path-run.txt)
+— 16 September 2026, against SQL Server 2022 in Docker and the dev Service Bus
+namespace `sb-quotes-7mo4cimyk4vnk`.
+
+```
+== Commit 8: Catalog -- submit and publish three quotes ==
+  quote 80c13698-… publishable=True   (and two more)
+== Commit 9: Curation -- create a collection and add all three quotes ==
+  collection 3df18910-a18b-401a-8afd-10c1cdc2c213 submitted for publication
+== Commit 10: waiting for Moderation to open a review (outbox -> Service Bus -> consumer) ==
+  review 80e14abe-… opened, outcome=Pending
+  review 80e14abe-… approved
+== Commit 11 + 12: waiting for the edition (Curation applies the approval, Publishing builds it) ==
+
+HAPPY PATH VERIFIED
+  Collection: 3df18910-a18b-401a-8afd-10c1cdc2c213
+  Edition:    1 at slug 'day-29-happy-path-3df18910'
+  Items:      3
+```
+
+Hops 3 and 5 are reachable only through the message path — the script waits for
+them rather than asserting on a response — so a broken relay, a missing
+subscription or a wrong filter rule surfaces here as a timeout, not a pass.
+
+**What the first four attempts cost, and why it belongs in the submission.**
+The run failed four times, and only one cause was in the application:
+
+| # | Failure | Where it was |
+|---|---------|--------------|
+| 1 | The Service Bus topology did not exist — and the provisioning script's dry run reported that it did, because its probes were skipped under `-DryRun` and a skipped probe returned null, which the caller read as "found" | verification tooling (`10c0507`) |
+| 2 | `az` rejected `--dead-letter-on-message-expiration`; the flag is `--enable-dead-lettering-on-message-expiration` | verification tooling (`ba7abeb`) |
+| 3 | EF Core logs every command at Information; four relays polling on a short interval buried the one real error under hundreds of heartbeat queries | operations (`5d304df`) |
+| 4 | Adding an item to a **saved** collection issued an `UPDATE` for a row that was never inserted, failing with `DbUpdateConcurrencyException`. Creating a collection worked; adding to it did not — the owner's entity state decided which, and a client-set Guid key on an `Unchanged` owner reads to EF as "this row exists" | **application** (`58dd92d`) |
+
+The fourth is the one a reviewer should care about, and it is worth being precise
+about why nothing caught it earlier: it compiles, it passes every test in the
+suite, and it only appears on the *second* write to an aggregate — the first
+write, where the owner is `Added`, inserts correctly. No test performed a second
+write to a loaded aggregate. Publishing's `EditionItem` is immune to the same
+mistake because it keys on the composite `(EditionId, Position)` rather than a
+client-generated Guid, which is the pattern that avoided the problem by
+construction rather than by care.
+
+The first three say something else. A dry run that reports success without
+checking is worse than no dry run, because it converts "unknown" into "verified".
+That the verification layer was the least verified part of the day is the honest
+headline of this section.
+
+> **Clip still outstanding.** The transcript above is the run; a screen recording
+> of it has not been captured yet.
 
 ## Deliberately deferred (named, not silently dropped)
 
