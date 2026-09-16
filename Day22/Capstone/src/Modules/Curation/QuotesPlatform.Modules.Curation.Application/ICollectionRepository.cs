@@ -15,6 +15,25 @@ public interface ICollectionRepository
 {
     Task<Collection?> GetAsync(Guid id, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Every collection holding this quote that is still editable -- what a
+    /// QuoteRevised correction has to reach (design flow 2).
+    ///
+    /// It returns whole aggregates rather than a queryable, for the reason
+    /// above, and it filters on state HERE rather than letting the caller do
+    /// it because "editable" is the same rule Collection.ApplyQuoteRevision
+    /// applies internally. Having it in two places is the risk; having the
+    /// query load published collections only for the aggregate to silently
+    /// ignore them is the waste. This loads the ones that can change.
+    ///
+    /// A LIST IS THE POINT OF TENSION, and it is worth naming rather than
+    /// hiding. SaveChangesAsync below says one aggregate per transaction, and
+    /// a correction touching six collections commits six aggregates at once.
+    /// See QuoteRevisedHandler for why that is a deliberate exception and not
+    /// a quiet breach.
+    /// </summary>
+    Task<IReadOnlyList<Collection>> GetEditableByQuoteIdAsync(Guid quoteId, CancellationToken cancellationToken = default);
+
     Task AddAsync(Collection aggregate, CancellationToken cancellationToken = default);
 
     /// <summary>
