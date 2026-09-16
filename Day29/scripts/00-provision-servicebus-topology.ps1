@@ -62,7 +62,21 @@ $ErrorActionPreference = 'Stop'
 # so the three creates below cannot drift from each other.
 $subscriptions = [ordered]@{
     'moderation-review-requests' = "eventType = 'CollectionSubmittedForPublication'"
-    'curation-review-decisions'  = "eventType IN ('CollectionApproved','CollectionRejected')"
+    # Everything Curation consumes, not only review decisions. The name is now
+    # narrower than the contents, and renaming it would mean deleting and
+    # recreating a subscription -- losing anything in flight and any
+    # dead-lettered message sitting in it. Not worth it for a name.
+    #
+    # ONE subscription rather than a second one for quote events: one receive
+    # loop, one dead-letter queue to watch. The trade is that the review-decision
+    # path and the quote-correction path now fail together, which is worth
+    # revisiting the day corrections become high-volume.
+    #
+    # THIS FILTER MUST BE APPLIED BEFORE THE PUBLISHERS SHIP. A subscription
+    # whose filter does not match is not an error anywhere -- the message is
+    # simply never delivered to it, and never redelivered either. Day 29 lost an
+    # afternoon to the version of this that presents as silence.
+    'curation-review-decisions'  = "eventType IN ('CollectionApproved','CollectionRejected','QuoteRevised','QuotePublishable')"
     'publishing-editions'        = "eventType = 'CollectionPublished'"
 }
 
