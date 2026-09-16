@@ -21,6 +21,13 @@ public sealed class EfReviewRepository(ModerationDbContext db) : IReviewReposito
             .OrderByDescending(r => r.OpenedAt)
             .FirstOrDefaultAsync(cancellationToken);
 
+    public Task<Review?> GetLatestBySubjectAsync(
+        ReviewSubject subject, Guid subjectId, CancellationToken cancellationToken = default) =>
+        db.Reviews
+            .Where(r => r.Subject == subject && r.SubjectId == subjectId)
+            .OrderByDescending(r => r.OpenedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+
     public Task AddAsync(Review aggregate, CancellationToken cancellationToken = default)
     {
         db.Reviews.Add(aggregate);
