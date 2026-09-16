@@ -1,8 +1,6 @@
-using System.Reflection;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using QuotesPlatform.Contracts;
-using CatalogHandler = QuotesPlatform.Modules.Catalog.Infrastructure.IIntegrationEventHandler;
 using CurationHandler = QuotesPlatform.Modules.Curation.Infrastructure.IIntegrationEventHandler;
 using ModerationHandler = QuotesPlatform.Modules.Moderation.Infrastructure.IIntegrationEventHandler;
 using PublishingHandler = QuotesPlatform.Modules.Publishing.Infrastructure.IIntegrationEventHandler;
@@ -35,6 +33,24 @@ public class IntegrationEventHandlerCompositionTests
 
     private const string ServiceBusNamespace = "composition-tests.servicebus.windows.net";
 
+    /// <summary>
+    /// THREE, not four. Catalog is the only publish-only module: it has no
+    /// consumer host and therefore no IIntegrationEventHandler at all. That is
+    /// not an oversight, it is the shape of the design today -- Catalog
+    /// announces QuoteSubmitted and QuoteRevised and listens for nothing,
+    /// because the event it will need to consume (QuoteApproved) belongs to
+    /// flow 3, which is not built.
+    ///
+    /// Day 31 adds Catalog's consumer host and this array grows a fourth
+    /// entry. Writing it as four today is what made this file fail to compile
+    /// the first time: symmetry is a bad reason to reference a type that does
+    /// not exist.
+    /// </summary>
+    private static readonly Type[] HandlerInterfaces =
+    [
+        typeof(CurationHandler), typeof(ModerationHandler), typeof(PublishingHandler)
+    ];
+
     private static ServiceCollection Compose()
     {
         var services = new ServiceCollection();
@@ -58,14 +74,8 @@ public class IntegrationEventHandlerCompositionTests
     [Fact]
     public void Every_handler_is_keyed_to_an_event_the_contracts_actually_define()
     {
-        var handlerInterfaces = new[]
-        {
-            typeof(CatalogHandler), typeof(CurationHandler),
-            typeof(ModerationHandler), typeof(PublishingHandler)
-        };
-
         var unknown = Compose()
-            .Where(descriptor => descriptor.IsKeyedService && handlerInterfaces.Contains(descriptor.ServiceType))
+            .Where(descriptor => descriptor.IsKeyedService && HandlerInterfaces.Contains(descriptor.ServiceType))
             .Select(descriptor => new
             {
                 Key = descriptor.ServiceKey as string,
@@ -88,14 +98,8 @@ public class IntegrationEventHandlerCompositionTests
         await using var provider = Compose().BuildServiceProvider(validateScopes: true);
         await using var scope = provider.CreateAsyncScope();
 
-        var handlerInterfaces = new[]
-        {
-            typeof(CatalogHandler), typeof(CurationHandler),
-            typeof(ModerationHandler), typeof(PublishingHandler)
-        };
-
         var keyed = Compose()
-            .Where(descriptor => descriptor.IsKeyedService && handlerInterfaces.Contains(descriptor.ServiceType))
+            .Where(descriptor => descriptor.IsKeyedService && HandlerInterfaces.Contains(descriptor.ServiceType))
             .Select(descriptor => (descriptor.ServiceType, Key: descriptor.ServiceKey!))
             .ToList();
 
@@ -124,14 +128,8 @@ public class IntegrationEventHandlerCompositionTests
     [Fact]
     public void The_events_with_no_consumer_are_the_ones_flow_3_will_add()
     {
-        var handlerInterfaces = new[]
-        {
-            typeof(CatalogHandler), typeof(CurationHandler),
-            typeof(ModerationHandler), typeof(PublishingHandler)
-        };
-
         var handled = Compose()
-            .Where(descriptor => descriptor.IsKeyedService && handlerInterfaces.Contains(descriptor.ServiceType))
+            .Where(descriptor => descriptor.IsKeyedService && HandlerInterfaces.Contains(descriptor.ServiceType))
             .Select(descriptor => (string)descriptor.ServiceKey!)
             .ToHashSet(StringComparer.Ordinal);
 
