@@ -15,6 +15,13 @@ public interface IReviewRepository
 {
     Task<Review?> GetAsync(Guid id, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// The pending review for a subject, if one is open -- how a reviewer (or
+    /// the happy-path script) finds the review Open() created without already
+    /// knowing its generated Id.
+    /// </summary>
+    Task<Review?> GetPendingBySubjectAsync(ReviewSubject subject, Guid subjectId, CancellationToken cancellationToken = default);
+
     Task AddAsync(Review aggregate, CancellationToken cancellationToken = default);
 
     /// <summary>

@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- References every module's Infrastructure rather than the Host: composing
+       the four modules is exactly what Program.cs does, and this project must
+       be able to do it without dragging in the web SDK. It is not named
+       QuotesPlatform.Modules.* on purpose: ModuleBoundaryTests treats any
+       project under that prefix as belonging to a module, and this one
+       deliberately sees all four. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Modules\Catalog\QuotesPlatform.Modules.Catalog.Infrastructure\QuotesPlatform.Modules.Catalog.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Curation\QuotesPlatform.Modules.Curation.Infrastructure\QuotesPlatform.Modules.Curation.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Moderation\QuotesPlatform.Modules.Moderation.Infrastructure\QuotesPlatform.Modules.Moderation.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Publishing\QuotesPlatform.Modules.Publishing.Infrastructure\QuotesPlatform.Modules.Publishing.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <!-- No Microsoft.Extensions.* PackageReferences. ServiceCollection,
+       AddLogging and IHostedService all arrive transitively through the four
+       Infrastructure projects, exactly as those projects themselves get
+       IServiceCollection without referencing it. Pinning them here pinned them
+       BEHIND EF Core: Microsoft.Extensions.Logging 10.0.0 against EF Core
+       10.0.10's own >= 10.0.10 is NU1605, a downgrade, and an error. -->
+  <ItemGroup>
+    <PackageReference Include="FluentAssertions" Version="7.0.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

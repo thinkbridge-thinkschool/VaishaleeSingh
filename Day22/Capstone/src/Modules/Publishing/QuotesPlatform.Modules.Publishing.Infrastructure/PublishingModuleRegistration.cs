@@ -1,5 +1,10 @@
+using Azure.Identity;
+using Azure.Messaging.ServiceBus;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using QuotesPlatform.Contracts;
+using QuotesPlatform.Modules.Publishing.Application;
 
 namespace QuotesPlatform.Modules.Publishing.Infrastructure;
 
@@ -15,13 +20,35 @@ public static class PublishingModuleRegistration
 {
     public static IServiceCollection AddPublishingModule(
         this IServiceCollection services,
-        string connectionString)
+        string connectionString,
+        string serviceBusFullyQualifiedNamespace)
     {
-        services.AddDbContext<PublishingDbContext>(options => options.UseSqlite(connectionString));
+        // Migrations history per schema, not the shared dbo.__EFMigrationsHistory.
+        // Four DbContexts over one database otherwise write their migration rows
+        // into one table: two modules that generate a migration with the same
+        // name in the same second collide on its primary key, and every
+        // `dotnet ef` command for one module reads three other modules' rows.
+        services.AddDbContext<PublishingDbContext>(options =>
+            options.UseSqlServer(connectionString, sql =>
+                sql.MigrationsHistoryTable("__EFMigrationsHistory", PublishingDbContext.Schema)));
 
-        // Repositories and use-case handlers are registered here as they are
-        // written. Day 22 is the scaffold: the boundary is what is being
-        // established today, not the feature set.
+        services.AddScoped<IEditionRepository, EfEditionRepository>();
+        services.AddScoped<IPublishingIntegrationEventPublisher, EfOutboxIntegrationEventPublisher>();
+
+        // TryAdd, not Add. All four modules want a client for the SAME namespace
+        // (the Host hands each of them the same value), and four AddSingleton
+        // calls against one service type do not produce four clients -- the
+        // container keeps the last and silently drops the other three. One
+        // client is also what the Azure SDK asks for: it owns an AMQP
+        // connection and is built to be shared. So each module says "I need one
+        // of these" and the first registration satisfies the rest, which is
+        // what was already happening, now on purpose rather than by accident.
+        services.TryAddSingleton(_ =>
+            new ServiceBusClient(serviceBusFullyQualifiedNamespace, new DefaultAzureCredential()));
+        services.AddHostedService<PublishingOutboxRelayService>();
+        services.AddHostedService<PublishingServiceBusConsumerHost>();
+
+        services.AddKeyedScoped<IIntegrationEventHandler, CollectionPublishedHandler>(nameof(CollectionPublished));
 
         return services;
     }

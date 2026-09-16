@@ -1,0 +1,77 @@
+Happy path, run end to end against real infrastructure.
+
+Date        : 16 September 2026
+Command     : ./Day29/verification/happy-path.ps1 -BaseUrl http://localhost:5080 -TimeoutSeconds 60
+API         : QuotesPlatform.Host on http://localhost:5080
+Database    : SQL Server 2022 in Docker, four migrated schemas
+              (catalog, curation, moderation, publishing)
+Messaging   : Azure Service Bus namespace sb-quotes-7mo4cimyk4vnk (thinkschool-dev-rg),
+              topic capstone.collection-events with three filtered subscriptions.
+              disableLocalAuth = true, so this ran on the developer's own Entra
+              principal via DefaultAzureCredential with Azure Service Bus Data
+              Owner on the namespace -- there is no connection-string path.
+
+-------------------------------------------------------------------------------
+
+== Commit 8: Catalog -- submit and publish three quotes ==
+  quote 80c13698-3e41-4ab0-895d-cebbe24e6dfe publishable=True
+  quote 08333837-2009-4290-b608-6d5b973a0e66 publishable=True
+  quote de7606e6-72ab-4977-a6bf-ee85f2d3bc13 publishable=True
+== Commit 9: Curation -- create a collection and add all three quotes ==
+  collection 3df18910-a18b-401a-8afd-10c1cdc2c213 submitted for publication
+== Commit 10: waiting for Moderation to open a review (outbox -> Service Bus -> consumer) ==
+  review 80e14abe-adc5-45eb-b7cf-493ccc9b653f opened, outcome=Pending
+  review 80e14abe-adc5-45eb-b7cf-493ccc9b653f approved
+== Commit 11 + 12: waiting for the edition (Curation applies the approval, Publishing builds it) ==
+
+HAPPY PATH VERIFIED
+  Collection: 3df18910-a18b-401a-8afd-10c1cdc2c213
+  Edition:    1 at slug 'day-29-happy-path-3df18910'
+  Items:      3
+    [1] Author 1: Quote text number 1.
+    [2] Author 2: Quote text number 2.
+    [3] Author 3: Quote text number 3.
+
+-------------------------------------------------------------------------------
+
+WHAT THIS RUN PROVES, AND WHAT IT DOES NOT
+
+Proves, because nothing here is stubbed: four module schemas migrate and
+accept writes; the transactional outbox claims, publishes and marks rows;
+messages cross a real Service Bus topic and are selected by the eventType
+filter rules; three consumer hosts receive, dedupe and handle them; and an
+edition is assembled by a module that never calls another module
+synchronously. Hops 3 and 5 are only reachable through the message path --
+the script waits for them rather than asserting on a return value -- so a
+broken relay, a missing subscription or a wrong filter shows up here as a
+timeout, not as a pass.
+
+Does not prove: concurrency (one collection, one actor, no contention),
+ordering (a single event per hop, so nothing arrives out of sequence),
+failure handling (nothing was made to fail, so the retry budget,
+dead-lettering and the idempotency table were never exercised against a
+real duplicate), or the deployed topology (this ran against local SQL, not
+the Azure SQL database the Container App uses).
+
+WHAT IT COST TO GET HERE
+
+The first four attempts failed, and none of the causes were visible before
+running:
+
+  1. The Service Bus topology did not exist. The provisioning script's dry
+     run reported that everything already existed because its probes were
+     skipped under -DryRun and a skipped probe returns null, which the
+     caller read as "found". Fixed in 10c0507.
+  2. az rejected --dead-letter-on-message-expiration; the flag is
+     --enable-dead-lettering-on-message-expiration. Fixed in ba7abeb.
+  3. EF Core logs every command at Information, and four relays polling on
+     a short interval buried the one error that mattered under hundreds of
+     heartbeat queries. Fixed in 5d304df.
+  4. Adding an item to a saved collection issued an UPDATE for a row that
+     had never been inserted, and failed with DbUpdateConcurrencyException.
+     Creating a collection worked; adding to it did not. Fixed in 58dd92d --
+     see that commit message for why the owner's entity state decided it.
+
+Only the fourth was in the application. The other three were in the tools
+meant to verify it, which is its own finding: verification that has never
+been run is not verification.

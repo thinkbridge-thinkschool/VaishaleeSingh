@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using QuotesPlatform.Modules.Catalog.Domain;
+using QuotesPlatform.SharedKernel;
 
 namespace QuotesPlatform.Modules.Catalog.Infrastructure;
 
@@ -22,6 +23,9 @@ public sealed class CatalogDbContext(DbContextOptions<CatalogDbContext> options)
     public const string Schema = "catalog";
 
     public DbSet<Quote> Quotes => Set<Quote>();
+
+    /// <summary>Written in the same transaction as a Quote change -- see EfOutboxIntegrationEventPublisher.</summary>
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

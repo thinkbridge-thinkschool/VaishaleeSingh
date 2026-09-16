@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using QuotesPlatform.Modules.Publishing.Domain;
+using QuotesPlatform.SharedKernel;
 
 namespace QuotesPlatform.Modules.Publishing.Infrastructure;
 
@@ -22,6 +23,12 @@ public sealed class PublishingDbContext(DbContextOptions<PublishingDbContext> op
     public const string Schema = "publishing";
 
     public DbSet<Edition> Editions => Set<Edition>();
+
+    /// <summary>Written in the same transaction as an Edition change -- see EfOutboxIntegrationEventPublisher.</summary>
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+
+    /// <summary>Consumer-side idempotency for PublishingServiceBusConsumerHost.</summary>
+    public DbSet<ProcessedMessage> ProcessedMessages => Set<ProcessedMessage>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
