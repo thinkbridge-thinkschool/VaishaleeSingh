@@ -20,12 +20,31 @@ today's docs and verification artifact in `Day29/`.
 | Code | `Day22/Capstone` |
 | Docs, scripts, verification | `Day29/` |
 
-Newest first. The first thirteen built the happy path; everything above them
-is the review round (see "What the review changed"). The listing below is a
-snapshot — the command underneath it is the source of truth, and it will
-include this commit and anything after it:
+Newest first, in three rounds. The bottom thirteen **built** the happy path.
+The middle group is the **review** round — what a reviewer found before anything
+had been run (see "What the review changed"). The top group is the **run** round:
+what only appeared once it was actually executed against real infrastructure, and
+the reason that group exists at all is that the first two rounds were done
+without running anything.
+
+The listing below is a snapshot — the command underneath it is the source of
+truth, and it will include this commit and anything after it:
 
 ```
+49c6e7d docs(day29): the happy path has run; replace the placeholder with it
+6bafd45 docs(day29): record the happy path running end to end
+58dd92d fix(curation): adding an item to a saved collection issued an UPDATE
+bb0d691 fix(day29): the port-in-use message printed the PID twice
+d9265fd fix(day29): run-host refuses to start when the port is already taken
+26bb96f feat(day29): add run-host.ps1 so the Host starts the same way every time
+657f938 fix(host): remove the comment key from the LogLevel section
+5d304df chore(host): quiet EF Core's per-command logging
+ba7abeb fix(day29): correct the dead-lettering flag on subscription create
+d5c643f fix(day29): dry run says "would create", not "created"
+10c0507 fix(day29): make the topology script's existence probes actually work
+89de8ce fix(tests): dispose the composition provider asynchronously
+d564763 fix(tests): the composition test project pinned Microsoft.Extensions behind EF Core
+342466d docs(day29): repo URL, the day's commit log, and the happy-path walkthrough
 1ebcb12 docs(day29): record what the review found, and correct what this claimed
 e40fbb9 fix(day29): the happy-path script could not have passed
 cb8dc9e feat(day29): provision the Service Bus topology the capstone needs
@@ -90,11 +109,13 @@ real transactions) and Azure Service Bus (real publish/receive over the
 `moderation-review-requests`, `curation-review-decisions` and
 `publishing-editions` subscriptions). Nothing is faked or in-memory.
 
-**It has still not been run, and the first version of this document was wrong
-about why.** It said the only obstacle was that this environment has no
-reachable SQL Server or Service Bus namespace. A review found four reasons it
-could not have run even with both in front of it — three of them defects in
-today's own code, all now fixed:
+**It has now been run — see "It has now run" below — and this section has been
+wrong twice on the way there, in opposite directions.**
+
+The first version said the only obstacle was that this environment had no
+reachable SQL Server or Service Bus namespace. A review then found four reasons
+it could not have run even with both in front of it, three of them defects in
+today's own code:
 
 | # | What | Where it was |
 |---|---|---|
@@ -111,6 +132,13 @@ Which is the fifth finding, and the one that made the other four possible:
 on a pull request reporting "all checks have passed" — a green tick that was
 true about other code entirely.
 
+And then the second version of this section was wrong the other way: having
+fixed those five, it implied the path was clear and only the environment stood
+in the way. Running it found four more, listed under "It has now run". The
+pattern is worth naming, because it is the lesson of the day rather than a
+footnote to it: **each round of reasoning about why something would work found
+less than one round of running it.**
+
 ## What the review changed
 
 | Fix | Where |
@@ -124,6 +152,17 @@ true about other code entirely.
 | `Out-Null` on mark-publishable; `Get-Slug` walks characters exactly as `CollectionPublishedHandler.Slugify` does, and casts to `[guid]` | `Day29/verification/happy-path.ps1` |
 | A `capstone` job that restores, builds and tests `Day22/Capstone/QuotesPlatform.slnx` | `.github/workflows/ci.yml` |
 | Composition tests: no service type registered by two modules, every hosted service constructs, each module resolves its own publisher | **new** `Day22/Capstone/tests/QuotesPlatform.CompositionTests` |
+
+### And what running it changed
+
+| Fix | Where |
+|---|---|
+| Owned-collection keys declared `ValueGeneratedNever` — a client-set Guid on a **loaded** owner made EF issue an `UPDATE` for a row that was never inserted | `CollectionConfiguration.cs` (`58dd92d`) |
+| The topology script's existence probes actually run: `$ErrorActionPreference = 'Stop'` plus `2>&1` made PowerShell throw on az's first stderr write before `$LASTEXITCODE` was read, so `-AllowFailure` was unreachable; and probes skipped under `-DryRun` returned null, which the caller read as "found" | `00-provision-servicebus-topology.ps1` (`10c0507`, `d5c643f`) |
+| `--enable-dead-lettering-on-message-expiration`, verified against `az … --help` rather than guessed a second time | `00-provision-servicebus-topology.ps1` (`ba7abeb`) |
+| EF Core command logging down to Warning — four relays polling on a short interval buried every real error under heartbeat queries | `appsettings.json` (`5d304df`, `657f938`) |
+| `run-host.ps1`: one way to start the Host, password from the environment and never defaulted in the file, and a refusal-with-PID when the port is already held | **new** `Day29/scripts/run-host.ps1` (`26bb96f`, `d9265fd`, `bb0d691`) |
+| The composition provider disposed asynchronously — `ServiceBusClient` is `IAsyncDisposable` only, so a synchronous `using` threw after every assertion passed | `ModuleCompositionTests.cs` (`89de8ce`) |
 
 **The CI job paid for itself before it ever passed.** Its first two runs failed
 on the composition test project rather than on the code under review — a
@@ -155,18 +194,44 @@ migrations over existing objects.
 ./Day29/scripts/00-provision-servicebus-topology.ps1 -DryRun
 ./Day29/scripts/00-provision-servicebus-topology.ps1
 
-# Step 0b: a standing SQL Server
-docker run -e "ACCEPT_EULA=Y" -e "MSSQL_SA_PASSWORD=<local>" -p 1433:1433 -d mcr.microsoft.com/mssql/server:2022-latest
+# Step 0b: data-plane access for your own principal.
+# The namespace has disableLocalAuth = true, so there is no connection string
+# and being subscription Owner is NOT enough -- data-plane roles are separate.
+$me = az ad signed-in-user show --query id -o tsv
+az role assignment create --assignee $me --role "Azure Service Bus Data Owner" `
+  --scope "/subscriptions/<sub>/resourceGroups/thinkschool-dev-rg/providers/Microsoft.ServiceBus/namespaces/sb-quotes-7mo4cimyk4vnk"
+# Allow a few minutes to propagate. Before it does, outbox rows sit at Pending
+# and nothing errors -- which looks exactly like a broken relay.
 
-dotnet user-secrets --project Day22/Capstone/src/QuotesPlatform.Host set "ConnectionStrings:Default" "<value>"
-dotnet user-secrets --project Day22/Capstone/src/QuotesPlatform.Host set "ServiceBus:FullyQualifiedNamespace" "<value>"
+# Step 0c: a standing SQL Server
+docker run -e "ACCEPT_EULA=Y" -e "MSSQL_SA_PASSWORD=<local>" -p 1433:1433 -d `
+  --name capstone-sql mcr.microsoft.com/mssql/server:2022-latest
 
-# Apply each module's migrations, then:
-dotnet run --project Day22/Capstone/src/QuotesPlatform.Host
+# Step 1: migrations, all four contexts.
+# --connection is NOT optional. The design-time factories hardcode
+# Server=(local);Database=QuotesPlatform.DesignTime, which is correct for
+# `migrations add` and wrong for `database update` -- without it the schema
+# lands somewhere you are not about to run against.
+$cs = "Server=localhost,1433;Database=QuotesPlatform;User Id=sa;Password=<local>;TrustServerCertificate=True"
+foreach ($m in 'Catalog','Curation','Moderation','Publishing') {
+  $p = "Day22/Capstone/src/Modules/$m/QuotesPlatform.Modules.$m.Infrastructure"
+  dotnet ef database update --project $p --startup-project $p --context "${m}DbContext" --connection $cs
+}
 
-# In a second terminal:
-./Day29/verification/happy-path.ps1 -BaseUrl https://localhost:<port>
+# Step 2: the Host. One script, so a fresh terminal cannot start it half-configured.
+$env:CAPSTONE_SQL_PASSWORD = '<local>'
+./Day29/scripts/run-host.ps1
+
+# Step 3: in a second terminal. http, not https -- Windows PowerShell 5.1's
+# Invoke-RestMethod has no -SkipCertificateCheck, so the dev certificate fails
+# every call on trust.
+./Day29/verification/happy-path.ps1 -BaseUrl http://localhost:5080 -TimeoutSeconds 60
 ```
+
+Each of those comments is there because the step under it cost a failed run.
+The sequence above is the one that produced
+[`happy-path-run.txt`](../verification/happy-path-run.txt), not a reconstruction
+of what should have worked.
 
 Recording what could not be verified is part of the deliverable — the same
 discipline Day 13's submission used. Recording it **accurately** is the part
