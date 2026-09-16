@@ -1,8 +1,11 @@
-# Day 30 — Build day 2: flows 1 and 2 complete
+# Day 30 — Build day 2: feature completeness (all three flows)
 
-Closes the reject/revise loop in flow 1 and builds flow 2 (quote correction)
-end to end. **Flow 3 (quote moderation) is deliberately not here** — see "What
-is not in this PR".
+All three async flows in `capstone-design.md` are built: the reject/revise loop
+completes flow 1, quote correction is flow 2, and quote moderation is flow 3.
+`mark-publishable`, Day 29's stand-in, is deleted.
+
+The concrete test of "feature complete": `Every_integration_event_has_a_consumer`
+— no contract in `QuotesPlatform.Contracts` that nobody listens to.
 
 Full write-up: `Day30/docs/day30-submission.md`. Plan and gap analysis:
 `Day30/docs/day30-plan.md`.
@@ -44,14 +47,19 @@ than have it found later.
    call to `GET /api/reviews/by-subject/{id}/latest`. The alternative was
    storing it on the collection; rejected because a decision and its grounds
    belong to the module that made them.
-2. **`QuoteRevisedHandler` commits N aggregates in one transaction**, against
-   the rule on `ICollectionRepository.SaveChangesAsync`. My argument is that
-   the rule guards against coupled *invariants* and these snapshots are
-   independent — and that splitting it would break the consumer host's
-   idempotency guarantee, since it commits handler work with the
-   `ProcessedMessages` row. **This needs an ADR it does not have yet.**
+2. **`QuoteRevisedHandler` and `QuotePublishableHandler` commit N aggregates in
+   one transaction**, against the rule on
+   `ICollectionRepository.SaveChangesAsync`. The argument — the rule guards
+   against coupled *invariants*, these snapshots are independent, and splitting
+   it would break the consumer host's idempotency guarantee — is now written up
+   as **ADR-0002**, with the three alternatives and the condition under which
+   each would have won.
 3. **Remove is `POST .../items/{quoteId}/remove`, not `DELETE`**, to keep a
    user identifier out of the query string and therefore out of access logs.
+4. **Deleting `mark-publishable` is a breaking change** to any caller relying
+   on it. Justified because it was a stand-in for a flow that now exists, and
+   leaving it would mean two ways to make a quote publishable with only one of
+   them audited — but it is a deletion, and worth a second opinion.
 
 ## Infrastructure change, already applied
 
@@ -67,23 +75,31 @@ namespace is already updated.
 
 ## What is not in this PR
 
-- **Flow 3 (quote moderation).** Cut at the track boundary rather than
-  half-built: Catalog needs a consumer host, a `ProcessedMessages` migration
-  and a fourth subscription. `mark-publishable` remains as the documented
-  stand-in. Day 31.
-- **Integration tests against a real database.** This is the real gap and I
-  want it on the record: the three new composition tests prove every handler is
-  registered, correctly keyed and constructible, but **no handler in this
-  solution has ever been executed.** `CollectionRejectedHandler` and
-  `QuoteRevisedHandler` are compiled and composed, not verified. The
-  Testcontainers harness is first on Day 31, ahead of flow 3.
+- **Dead-letter monitoring.** Poison messages dead-letter after the retry
+  budget and nothing watches the queues. Given three "silent message" failures
+  in two days, and ADR-0002 making one dead letter cost a whole broadcast, this
+  is the most valuable thing still missing.
+- **A bound on the broadcast fan-out** (ADR-0002, "what we now owe").
+- **Authentication.** Endpoints still take a plain `actorId`.
 
 ## Verification
 
-- `dotnet build` and `dotnet test` green (47 tests).
-- Topology applied to the live dev namespace and confirmed.
-- **Not** run end to end against SQL Server and Service Bus. The Day 29
-  happy-path transcript still stands; the new paths have no equivalent yet.
+- `dotnet build` and `dotnet test` green. Every commit claiming to be verified
+  was built and tested **before** it was committed, after two CI failures
+  earlier in the day proved the opposite order does not work.
+- **`QuotesPlatform.IntegrationTests` is new and is the answer to this PR's
+  original biggest weakness.** Ten tests against a real SQL Server 2022
+  container: the reject/revise loop through to edition 2, a correction reaching
+  a draft and stopping at a published edition, a quote announced twice opening
+  exactly one review, approval producing both the flag and the outbox row, and
+  a collection refusing submission until its quote clears review. These are the
+  first tests in the solution that execute a handler.
+- Both topology changes applied to the live dev namespace and confirmed.
+
+**Still not covered:** Service Bus itself — filters, subscriptions, delivery,
+dead-lettering. All three failures that have cost this project real time live
+in that gap and none is catchable by these tests, which is why
+`happy-path.ps1` against the live namespace remains part of the deliverable.
 
 ## Reviewing this
 

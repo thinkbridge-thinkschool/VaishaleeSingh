@@ -11,17 +11,25 @@ today's docs in `Day30/`; two script changes in `Day29/scripts/`.
 
 ## What "feature complete" means at the end of today, precisely
 
-Two of the design's three async flows are complete. The third is not, and it
-was cut at a track boundary rather than half-built.
+All three of the design's async flows are complete.
 
 | | Flow | Start of day | Now |
 |---|---|---|---|
 | 1 | Publish: submit → review → approve → edition | Approve only | Approve **and reject**, revise, edition *n* |
 | 2 | Quote correction reaches drafts, stops at editions | Nothing | Complete |
-| 3 | Quote moderation: submitted → review → publishable | `mark-publishable` stand-in | **Deferred to Day 31**, stand-in still in place |
+| 3 | Quote moderation: submitted → review → publishable | `mark-publishable` stand-in | Complete; **the stand-in is deleted** |
 
-Twelve commits. `dotnet build` and `dotnet test` green; the topology change is
-applied to the live namespace.
+All three async flows in `capstone-design.md` are built. The concrete test of
+that claim is `Every_integration_event_has_a_consumer`: there is no contract
+declared in `QuotesPlatform.Contracts` that no module listens to.
+
+Twenty-two commits. `dotnet build` and `dotnet test` green at every commit that
+claims to be; both topology changes are applied to the live namespace.
+
+The day was planned to cut flow 3 to Day 31 at the track boundary. That cut was
+reversed on instruction, and the plan's own reasoning for it — that more
+unverified surface is worth less than confidence in what exists — is answered
+by the integration tests below rather than ignored.
 
 ## The gap analysis is most of the value
 
@@ -166,32 +174,64 @@ existing" without being edited is not a code problem.**
 `Day29/scripts/stop-host.ps1` exists because of failure 2, and it was written
 on the day it was annoying, which is the only day anybody writes that script.
 
+## Flow 3, and the assumption it caught on the way through
+
+Built after the cut line was reversed. Catalog gained the plumbing every other
+module already had — an `IIntegrationEventHandler`, a consumer host on the new
+`catalog-quote-decisions` subscription, a `ProcessedMessages` table and its
+migration. It was the last publish-only module, and only because the one event
+it cares about had no producer.
+
+`POST /api/quotes/{id}/mark-publishable` is **deleted**, not left alongside.
+Two ways to make a quote publishable is one too many, and only one of them
+leaves a `Review` recording who decided and when. A stand-in that outlives the
+thing it stood in for becomes the back door nobody audits.
+
+**And it caught a second instance of the morning's defect.**
+`GET /api/reviews/by-subject/{id}` hardcoded `ReviewSubject.Collection` — so a
+quote review returned 404 for a review that was open and pending. That is the
+same assumption, in the same module, that made the approve endpoint publish
+`CollectionApproved` for every review. Fixing one this morning did not fix the
+other, because **the shared mistake was an assumption rather than a line of
+code**, and an assumption does not show up in a diff. Worth naming as the
+lesson of the day: when a defect turns out to be "we treated a variable as a
+constant", the fix is to search for every other place that constant appears,
+not to correct the one that was reported.
+
 ## The real gap, stated plainly
 
-**No handler in this solution has ever been run against a database.** The three
-new composition tests prove each one is registered, correctly keyed and
-constructible — which catches the failure shape that has now cost time three
-times in two days of building (the Day 29 publisher collision, this morning's
-subscription filter, and a mis-keyed handler, all of which are "the message
-went nowhere and nothing complained").
+For most of the day this section said that no handler in this solution had ever
+been executed. `QuotesPlatform.IntegrationTests` closes that: a real SQL Server
+2022 container via Testcontainers, all four modules composed exactly as the
+Host composes them, all four sets of migrations applied, and ten tests that
+drive handlers the way their consumer hosts do — resolve keyed by event name,
+hand over the serialized payload, then `SaveChangesAsync` on the module's own
+context, because the handlers deliberately never save.
 
-What they do not do is run a handler. `CollectionRejectedHandler` and
-`QuoteRevisedHandler` have never executed. Neither has any endpoint added
-today. The Testcontainers harness the plan called for was not built, and until
-it is, tracks B and C are **compiled and composed, not verified.**
+Real SQL Server rather than SQLite or InMemory, for the reason Day 29 paid for:
+the defect that cost that day its fourth failed run was EF issuing an `UPDATE`
+for a row that was never inserted, and only a provider that enforces what an
+`UPDATE` means catches it. A test double would have passed.
 
-That is the honest state, and it is the first thing on Day 31 — ahead of
-flow 3, because more unverified surface is worth less than confidence in what
-is already there.
+**What these tests still do not cover, and it is not a small remainder.**
+Service Bus is absent by design — no filters, no subscriptions, no delivery,
+no dead-lettering. Every one of the three failures that has cost this project
+real time lives in exactly that gap: the Day 29 publisher collision, the
+subscription filter this morning, the topology that did not exist. None is
+catchable here. `happy-path.ps1` against the live namespace therefore stays
+part of the deliverable rather than being replaced by this.
+
+So the honest statement is narrower than "verified" but much stronger than
+this morning's: **the business logic in every handler has now run against a
+real database; the messaging around it has not been re-proven today.**
 
 ## Deferred, by name
 
-- **Flow 3, quote moderation.** Cut at the track boundary per the plan, not
-  half-built. Catalog needs a consumer host, a `ProcessedMessages` migration, a
-  fourth subscription, and four commits. `mark-publishable` remains the
-  documented stand-in.
-- **Integration tests against real SQL Server.** Above.
-- **ADR-0002**, the one-transaction-over-N-aggregates decision.
+- **Dead-letter monitoring.** Poison messages dead-letter after the Day 20
+  retry budget and nothing watches the queues. After three "silent message"
+  failures in two days, and with ADR-0002 making a single dead letter cost a
+  whole broadcast, this is now the most valuable thing not built.
+- **A bound on the broadcast fan-out**, per ADR-0002's "what we now owe".
 - **Authentication.** Endpoints still take a plain `actorId`. Day 31 in
   `Day28/docs/day28-build-plan.md`; a day, not an afternoon.
 - **Retention for `OutboxMessages` and `ProcessedMessages`.** Both grow without
