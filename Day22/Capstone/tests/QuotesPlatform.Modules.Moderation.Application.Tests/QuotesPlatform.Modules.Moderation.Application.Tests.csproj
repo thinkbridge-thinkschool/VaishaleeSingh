@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Mirrors QuotesPlatform.Modules.Curation.Domain.Tests: one test project
+       per module, referencing only that module. This one sits at Application
+       rather than Domain because the thing under test -- the mapping from a
+       decided review to the integration event that announces it -- is an
+       Application concern, and it is the layer the subject-bug lived one floor
+       above. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Modules\Moderation\QuotesPlatform.Modules.Moderation.Application\QuotesPlatform.Modules.Moderation.Application.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentAssertions" Version="7.0.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>
