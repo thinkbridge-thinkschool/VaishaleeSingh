@@ -15,6 +15,9 @@ public interface IEditionRepository
 {
     Task<Edition?> GetAsync(Guid id, CancellationToken cancellationToken = default);
 
+    /// <summary>The live edition for a slug -- the highest EditionNumber, since slugs are stable per collection across editions.</summary>
+    Task<Edition?> GetLatestBySlugAsync(string slug, CancellationToken cancellationToken = default);
+
     Task AddAsync(Edition aggregate, CancellationToken cancellationToken = default);
 
     /// <summary>

@@ -12,6 +12,20 @@ namespace QuotesPlatform.Contracts;
 ///
 /// Implemented in the Host's shared infrastructure by the transactional outbox
 /// from Day 20: the write and the message commit together or not at all.
+///
+/// NEVER REGISTER THIS TYPE IN THE CONTAINER. Every module implements it, and
+/// all four modules compose into ONE container, so a registration against this
+/// type is a registration four modules compete for -- and the container keeps
+/// the last one. That happened: three modules resolved a fourth module's
+/// publisher, staged their outbox row on a DbContext their own
+/// SaveChangesAsync never saved, and the row was discarded with no error and a
+/// 200 response.
+///
+/// Each module therefore declares and registers its own
+/// I&lt;Module&gt;IntegrationEventPublisher, which extends this. A module cannot
+/// resolve another module's publisher because it cannot see the type, and the
+/// module boundary tests forbid the project reference that would let it. The
+/// contract stays shared; the registration is not shareable.
 /// </summary>
 public interface IIntegrationEventPublisher
 {
