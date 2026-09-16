@@ -54,6 +54,27 @@ This is the password you passed as MSSQL_SA_PASSWORD to `docker run`.
 '@
 }
 
+# A Host left running in another window holds the port, and Kestrel's answer
+# to that is a bind failure followed by roughly two hundred lines of unrelated
+# shutdown noise: four relays looping against a disposed IServiceProvider and
+# the Windows EventLog logger throwing while trying to report it. The real
+# cause -- "you already have one of these running" -- is the first line and is
+# gone off the top of the scrollback by the time you look. Say it here instead,
+# and name the process so it can be stopped without hunting through windows.
+$listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+if ($listener) {
+    $owner = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
+    $name  = if ($owner) { "$($owner.ProcessName) (PID $($owner.Id))" } else { "PID $($listener.OwningProcess)" }
+
+    throw @"
+Port $Port is already in use by $name.
+That is almost certainly a Host still running in another window. Stop it with:
+  Stop-Process -Id $($listener.OwningProcess) -Force
+or run this script on a different port:
+  ./Day29/scripts/run-host.ps1 -Port 5090
+"@
+}
+
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $project  = Join-Path $repoRoot 'Day22/Capstone/src/QuotesPlatform.Host'
 

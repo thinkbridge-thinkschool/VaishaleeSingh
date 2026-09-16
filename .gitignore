@@ -58,3 +58,6 @@ Day22/verification/day22-api-stderr.log
 # connected workspace. They are duplicates of files that already live at their
 # real paths; committing them would give every deliverable two homes that drift.
 Claude outputs/
+
+# Local run logs -- machine names, ports, local paths. Not artefacts.
+Day29/verification/host-run.log
