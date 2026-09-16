@@ -28,9 +28,18 @@ namespace QuotesPlatform.IntegrationTests;
 /// </summary>
 public sealed class CapstoneFixture : IAsyncLifetime
 {
-    private readonly MsSqlContainer _container = new MsSqlBuilder()
-        .WithImage("mcr.microsoft.com/mssql/server:2022-latest")
-        .Build();
+    // The image goes in the constructor, not WithImage: the parameterless
+    // MsSqlBuilder() is obsolete as of Testcontainers 4.15 and warns.
+    //
+    // "2022-latest" is a floating tag, which Day 7's fixture already flagged as
+    // a real reproducibility trade-off -- Microsoft moves it to newer cumulative
+    // updates, so this run and the same run in six months can pull different
+    // images with nothing here changing. Left floating for the same reason as
+    // there: a guessed CU tag that does not exist fails every pull outright,
+    // which is worse than the risk it guards against. If this suite ever fails
+    // in a way that looks environment-specific rather than code-specific, pin it.
+    private readonly MsSqlContainer _container =
+        new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest").Build();
 
     private ServiceProvider? _provider;
 

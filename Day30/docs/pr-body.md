@@ -95,6 +95,15 @@ namespace is already updated.
   a collection refusing submission until its quote clears review. These are the
   first tests in the solution that execute a handler.
 - Both topology changes applied to the live dev namespace and confirmed.
+- **57 tests, 0 failed**, including the 10 integration tests.
+
+The new test project introduced a high-severity advisory (`NU1903`,
+`SSH.NET 2024.1.0`, transitively via `Testcontainers.MsSql 4.1.0`) and cleared
+it in the same day by bumping to `Testcontainers.MsSql 4.15.0`, which resolves
+`SSH.NET 2026.0.0`. Flagged rather than waved through on "it is test-only and
+never ships" — that argument is true here and is also how advisories
+accumulate. The pre-existing `SQLitePCLRaw` NU1903 in `Day7/piece2` is
+untouched and remains Day 28's item.
 
 **Still not covered:** Service Bus itself — filters, subscriptions, delivery,
 dead-lettering. All three failures that have cost this project real time live

@@ -225,6 +225,32 @@ So the honest statement is narrower than "verified" but much stronger than
 this morning's: **the business logic in every handler has now run against a
 real database; the messaging around it has not been re-proven today.**
 
+## An advisory introduced and cleared in the same day
+
+Adding `QuotesPlatform.IntegrationTests` brought `Testcontainers.MsSql 4.1.0`,
+which depends transitively on `SSH.NET 2024.1.0` — a **high-severity advisory**,
+`NU1903`, `GHSA-q939-rpr3-3284`.
+
+Worth recording rather than shrugging at, for two reasons. `day28-build-plan.md`
+has "Day 30 — `SQLitePCLRaw` NU1903" as a planned item whose exit criterion is
+*"`dotnet build` produces no NU1903"* — and the day's work added a second one.
+And the excuse available was a good one: it is a test-only dependency that never
+ships, the same low-exposure argument the SQLite finding carries. That argument
+is exactly how advisories accumulate.
+
+The plan had already written the rule for this: if the bump cannot be made to
+work, the finding is **re-recorded with the reason** rather than forced through,
+because a dependency that cannot be upgraded is a known risk while a test suite
+bent to accommodate one is a hidden risk.
+
+It did not come to that. `Testcontainers.MsSql 4.15.0` resolves `SSH.NET
+2026.0.0` and the advisory is gone. The bump surfaced one obsolescence warning
+(`CS0618` — the parameterless `MsSqlBuilder()`), fixed in the same change, so
+the project builds with no warnings of its own.
+
+**Note the remaining NU1903 is not this one.** `SQLitePCLRaw` in
+`Day7/piece2` is still open and still Day 28's item; nothing today touched it.
+
 ## Deferred, by name
 
 - **Dead-letter monitoring.** Poison messages dead-letter after the Day 20
