@@ -49,6 +49,7 @@ public static class CurationModuleRegistration
         services.AddHostedService<CurationServiceBusConsumerHost>();
 
         services.AddKeyedScoped<IIntegrationEventHandler, CollectionApprovedHandler>(nameof(CollectionApproved));
+        services.AddKeyedScoped<IIntegrationEventHandler, CollectionRejectedHandler>(nameof(CollectionRejected));
 
         return services;
     }
