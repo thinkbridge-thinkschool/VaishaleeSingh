@@ -17,4 +17,6 @@
   <Project Path="tests/QuotesPlatform.ArchitectureTests/QuotesPlatform.ArchitectureTests.csproj" />
   <Project Path="tests/QuotesPlatform.CompositionTests/QuotesPlatform.CompositionTests.csproj" />
   <Project Path="tests/QuotesPlatform.Modules.Curation.Domain.Tests/QuotesPlatform.Modules.Curation.Domain.Tests.csproj" />
+  <Project Path="tests/QuotesPlatform.Modules.Moderation.Application.Tests/QuotesPlatform.Modules.Moderation.Application.Tests.csproj" />
+  <Project Path="tests/QuotesPlatform.IntegrationTests/QuotesPlatform.IntegrationTests.csproj" />
 </Solution>

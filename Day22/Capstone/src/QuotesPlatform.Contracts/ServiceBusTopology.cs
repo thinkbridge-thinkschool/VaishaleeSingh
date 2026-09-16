@@ -20,5 +20,8 @@ public static class ServiceBusTopology
 
         /// <summary>Publishing reads CollectionPublished here.</summary>
         public const string PublishingEditions = "publishing-editions";
+
+        /// <summary>Catalog reads QuoteApproved here (flow 3).</summary>
+        public const string CatalogQuoteDecisions = "catalog-quote-decisions";
     }
 }
