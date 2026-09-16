@@ -1,3 +1,4 @@
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using QuotesPlatform.Modules.Catalog.Infrastructure;
@@ -17,6 +18,9 @@ namespace QuotesPlatform.IntegrationTests;
 /// issuing an UPDATE for a row that was never inserted, which only appears
 /// against a provider that actually enforces what an UPDATE means. A test
 /// double would have passed.
+///
+/// One container for the whole run, one DATABASE per test -- see
+/// CreateDatabaseAsync for why the second half matters.
 ///
 /// SERVICE BUS IS NOT HERE, deliberately. These tests invoke handlers directly
 /// and commit the way CurationServiceBusConsumerHost does -- handler work and
@@ -41,14 +45,31 @@ public sealed class CapstoneFixture : IAsyncLifetime
     private readonly MsSqlContainer _container =
         new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest").Build();
 
-    private ServiceProvider? _provider;
+    public Task InitializeAsync() => _container.StartAsync();
 
-    public IServiceProvider Services => _provider
-        ?? throw new InvalidOperationException("Fixture not initialised.");
+    public Task DisposeAsync() => _container.DisposeAsync().AsTask();
 
-    public async Task InitializeAsync()
+    /// <summary>
+    /// A FRESH DATABASE PER TEST, on the one shared container.
+    ///
+    /// This is the half of Day 7's pattern the first version of this fixture
+    /// dropped. Starting a SQL Server per test costs real seconds, so the
+    /// container is shared; sharing the DATABASE as well is what makes a suite
+    /// go quietly flaky later. Every test here passed against one shared
+    /// database only because each generates its own GUIDs -- the first test
+    /// that counts rows, or asserts "there is exactly one review", would have
+    /// started failing depending on what ran before it, and it would have
+    /// looked like a bug in the code under test.
+    ///
+    /// Creating a database and running four sets of migrations costs about a
+    /// second per test. That is the right trade against a suite nobody trusts.
+    /// </summary>
+    public async Task<CapstoneDatabase> CreateDatabaseAsync()
     {
-        await _container.StartAsync();
+        var connectionString = new SqlConnectionStringBuilder(_container.GetConnectionString())
+        {
+            InitialCatalog = $"QuotesPlatform_{Guid.NewGuid():N}"
+        }.ConnectionString;
 
         var services = new ServiceCollection();
         services.AddLogging();
@@ -57,32 +78,37 @@ public sealed class CapstoneFixture : IAsyncLifetime
         // is never reached: no hosted service is started, so no ServiceBusClient
         // ever opens a connection.
         const string ns = "integration-tests.servicebus.windows.net";
-        services.AddCatalogModule(_container.GetConnectionString(), ns);
-        services.AddCurationModule(_container.GetConnectionString(), ns);
-        services.AddPublishingModule(_container.GetConnectionString(), ns);
-        services.AddModerationModule(_container.GetConnectionString(), ns);
+        services.AddCatalogModule(connectionString, ns);
+        services.AddCurationModule(connectionString, ns);
+        services.AddPublishingModule(connectionString, ns);
+        services.AddModerationModule(connectionString, ns);
 
-        _provider = services.BuildServiceProvider(validateScopes: true);
+        var provider = services.BuildServiceProvider(validateScopes: true);
 
-        await using var scope = _provider.CreateAsyncScope();
-        await scope.ServiceProvider.GetRequiredService<CatalogDbContext>().Database.MigrateAsync();
-        await scope.ServiceProvider.GetRequiredService<CurationDbContext>().Database.MigrateAsync();
-        await scope.ServiceProvider.GetRequiredService<ModerationDbContext>().Database.MigrateAsync();
-        await scope.ServiceProvider.GetRequiredService<PublishingDbContext>().Database.MigrateAsync();
+        await using (var scope = provider.CreateAsyncScope())
+        {
+            // The first Migrate creates the database; the rest add their schema.
+            await scope.ServiceProvider.GetRequiredService<CatalogDbContext>().Database.MigrateAsync();
+            await scope.ServiceProvider.GetRequiredService<CurationDbContext>().Database.MigrateAsync();
+            await scope.ServiceProvider.GetRequiredService<ModerationDbContext>().Database.MigrateAsync();
+            await scope.ServiceProvider.GetRequiredService<PublishingDbContext>().Database.MigrateAsync();
+        }
+
+        return new CapstoneDatabase(provider);
     }
+}
 
-    public async Task DisposeAsync()
-    {
-        // DisposeAsync, not Dispose: the provider holds a ServiceBusClient,
-        // which is IAsyncDisposable and NOT IDisposable. Disposing it
-        // synchronously throws after every assertion has already passed, which
-        // reads as a broken test and is not one. The composition tests learned
-        // this on Day 29; no reason to learn it twice.
-        if (_provider is not null)
-            await _provider.DisposeAsync();
+/// <summary>One test's database and the container composed against it.</summary>
+public sealed class CapstoneDatabase(ServiceProvider provider) : IAsyncDisposable
+{
+    public IServiceProvider Services => provider;
 
-        await _container.DisposeAsync();
-    }
+    // DisposeAsync, not Dispose, and the difference is not cosmetic: the
+    // provider holds a ServiceBusClient, which is IAsyncDisposable and NOT
+    // IDisposable. Disposing it synchronously throws AFTER every assertion has
+    // passed, which reads as a broken test and is not one. The composition
+    // tests learned this on Day 29; no reason to learn it twice.
+    public ValueTask DisposeAsync() => provider.DisposeAsync();
 }
 
 [CollectionDefinition(Name)]

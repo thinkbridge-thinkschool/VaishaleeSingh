@@ -27,8 +27,19 @@ namespace QuotesPlatform.IntegrationTests;
 /// test that forgot the save would assert on changes that were never written.
 /// </summary>
 [Collection(CapstoneCollection.Name)]
-public sealed class FlowTests(CapstoneFixture fixture)
+public sealed class FlowTests(CapstoneFixture fixture) : IAsyncLifetime
 {
+    private CapstoneDatabase _database = null!;
+
+    // Its own database, created before each test and dropped with the
+    // container at the end of the run. xUnit builds a new instance of this
+    // class per test, so this runs per test rather than per class.
+    public async Task InitializeAsync() => _database = await fixture.CreateDatabaseAsync();
+
+    public async Task DisposeAsync() => await _database.DisposeAsync();
+
+    private IServiceProvider Services => _database.Services;
+
     // ---- flow 1: the reject / revise loop -----------------------------------
 
     [Fact]
@@ -147,7 +158,7 @@ public sealed class FlowTests(CapstoneFixture fixture)
         await HandleModerationAsync(new QuoteSubmitted(Guid.NewGuid(), DateTimeOffset.UtcNow, quoteId, "curator-1"));
         await HandleModerationAsync(new QuoteSubmitted(Guid.NewGuid(), DateTimeOffset.UtcNow, quoteId, "curator-1"));
 
-        await using var scope = fixture.Services.CreateAsyncScope();
+        await using var scope = Services.CreateAsyncScope();
         var reviews = await scope.ServiceProvider.GetRequiredService<ModerationCtx>()
             .Set<Review>().Where(r => r.SubjectId == quoteId).ToListAsync();
 
@@ -163,7 +174,7 @@ public sealed class FlowTests(CapstoneFixture fixture)
         await HandleCatalogAsync(new QuoteApproved(
             Guid.NewGuid(), DateTimeOffset.UtcNow, quoteId, "reviewer-1"));
 
-        await using var scope = fixture.Services.CreateAsyncScope();
+        await using var scope = Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<CatalogCtx>();
 
         (await db.Quotes.SingleAsync(q => q.Id == quoteId)).IsPublishable.Should().BeTrue();
@@ -225,7 +236,7 @@ public sealed class FlowTests(CapstoneFixture fixture)
         where THandler : class
         where TContext : DbContext
     {
-        await using var scope = fixture.Services.CreateAsyncScope();
+        await using var scope = Services.CreateAsyncScope();
         var handler = scope.ServiceProvider.GetRequiredKeyedService<THandler>(evt.GetType().Name);
         var db = scope.ServiceProvider.GetRequiredService<TContext>();
 
@@ -243,7 +254,7 @@ public sealed class FlowTests(CapstoneFixture fixture)
 
     private async Task<Guid> GivenQuoteAsync(bool publishable)
     {
-        await using var scope = fixture.Services.CreateAsyncScope();
+        await using var scope = Services.CreateAsyncScope();
         var repository = scope.ServiceProvider.GetRequiredService<IQuoteRepository>();
         var quote = Quote.Submit("Author", "Some quote text.", "curator-1", DateTimeOffset.UtcNow);
 
@@ -260,7 +271,7 @@ public sealed class FlowTests(CapstoneFixture fixture)
     private async Task<Collection> GivenCollectionHoldingAsync(
         Guid quoteId, string author, string text, bool publishable = true, bool fillToMinimum = false)
     {
-        await using var scope = fixture.Services.CreateAsyncScope();
+        await using var scope = Services.CreateAsyncScope();
         var repository = scope.ServiceProvider.GetRequiredService<ICollectionRepository>();
 
         var collection = Collection.Create($"Collection {Guid.NewGuid():N}"[..40], "curator-1", DateTimeOffset.UtcNow);
@@ -301,7 +312,7 @@ public sealed class FlowTests(CapstoneFixture fixture)
 
     private async Task MutateCollectionAsync(Guid id, Action<Collection> mutate)
     {
-        await using var scope = fixture.Services.CreateAsyncScope();
+        await using var scope = Services.CreateAsyncScope();
         var repository = scope.ServiceProvider.GetRequiredService<ICollectionRepository>();
         var collection = await repository.GetAsync(id) ?? throw new InvalidOperationException($"Collection {id} missing.");
 
@@ -312,7 +323,7 @@ public sealed class FlowTests(CapstoneFixture fixture)
 
     private async Task<Collection> LoadCollectionAsync(Guid id)
     {
-        await using var scope = fixture.Services.CreateAsyncScope();
+        await using var scope = Services.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<ICollectionRepository>().GetAsync(id)
             ?? throw new InvalidOperationException($"Collection {id} missing.");
     }
