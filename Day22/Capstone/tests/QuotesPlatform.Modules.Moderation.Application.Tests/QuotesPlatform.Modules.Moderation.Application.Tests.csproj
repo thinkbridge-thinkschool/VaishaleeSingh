@@ -2,10 +2,10 @@
 
   <!-- Mirrors QuotesPlatform.Modules.Curation.Domain.Tests: one test project
        per module, referencing only that module. This one sits at Application
-       rather than Domain because the thing under test -- the mapping from a
-       decided review to the integration event that announces it -- is an
-       Application concern, and it is the layer the subject-bug lived one floor
-       above. -->
+       rather than Domain because the thing under test, the mapping from a
+       decided review to the integration event that announces it, is an
+       Application concern, and it is one floor above where the subject bug
+       lived. -->
   <ItemGroup>
     <ProjectReference Include="..\..\src\Modules\Moderation\QuotesPlatform.Modules.Moderation.Application\QuotesPlatform.Modules.Moderation.Application.csproj" />
   </ItemGroup>
