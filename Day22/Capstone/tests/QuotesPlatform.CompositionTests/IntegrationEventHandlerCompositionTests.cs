@@ -5,6 +5,7 @@ using QuotesPlatform.Modules.Catalog.Infrastructure;
 using QuotesPlatform.Modules.Curation.Infrastructure;
 using QuotesPlatform.Modules.Moderation.Infrastructure;
 using QuotesPlatform.Modules.Publishing.Infrastructure;
+using CatalogHandler = QuotesPlatform.Modules.Catalog.Infrastructure.IIntegrationEventHandler;
 using CurationHandler = QuotesPlatform.Modules.Curation.Infrastructure.IIntegrationEventHandler;
 using ModerationHandler = QuotesPlatform.Modules.Moderation.Infrastructure.IIntegrationEventHandler;
 using PublishingHandler = QuotesPlatform.Modules.Publishing.Infrastructure.IIntegrationEventHandler;
@@ -45,21 +46,18 @@ public class IntegrationEventHandlerCompositionTests
     private const string ServiceBusNamespace = "composition-tests.servicebus.windows.net";
 
     /// <summary>
-    /// THREE, not four. Catalog is the only publish-only module: it has no
-    /// consumer host and therefore no IIntegrationEventHandler at all. That is
-    /// not an oversight, it is the shape of the design today -- Catalog
-    /// announces QuoteSubmitted and QuoteRevised and listens for nothing,
-    /// because the event it will need to consume (QuoteApproved) belongs to
-    /// flow 3, which is not built.
+    /// Four, as of flow 3. Catalog was the last publish-only module: it
+    /// announced QuoteSubmitted and QuoteRevised and listened for nothing,
+    /// because the one event it cares about (QuoteApproved) had no producer
+    /// until today.
     ///
-    /// Day 31 adds Catalog's consumer host and this array grows a fourth
-    /// entry. Writing it as four today is what made this file fail to compile
-    /// the first time: symmetry is a bad reason to reference a type that does
-    /// not exist.
+    /// This array was three entries an hour ago and the comment above it said
+    /// Day 31 would add the fourth. Flow 3 landed instead, so it did.
     /// </summary>
     private static readonly Type[] HandlerInterfaces =
     [
-        typeof(CurationHandler), typeof(ModerationHandler), typeof(PublishingHandler)
+        typeof(CatalogHandler), typeof(CurationHandler),
+        typeof(ModerationHandler), typeof(PublishingHandler)
     ];
 
     private static ServiceCollection Compose()
@@ -129,15 +127,19 @@ public class IntegrationEventHandlerCompositionTests
     }
 
     /// <summary>
-    /// The inverse, and the one that will fail next. Flow 3 is not built yet,
-    /// so QuoteSubmitted, QuoteApproved and QuotePublishable are declared,
-    /// publishable and consumed by nobody. Listing them here rather than
-    /// asserting every contract has a handler, because the unhandled ones are
-    /// a known gap with a dated plan behind them and a test that fails for a
-    /// deliberate omission is a test people learn to ignore.
+    /// EVERY integration event now has a consumer, which is what "feature
+    /// complete" means concretely: there is no contract declared in this
+    /// solution that nobody listens to.
+    ///
+    /// This started the day as an inventory of the three events flow 3 would
+    /// add, precisely because a test that fails for a deliberate, dated
+    /// omission is a test people learn to ignore. Flow 3 landed, the list
+    /// emptied, and the assertion inverted into something much stronger: an
+    /// event appearing here now means a contract was declared without a
+    /// consumer, or a consumer lost its registration.
     /// </summary>
     [Fact]
-    public void The_events_with_no_consumer_are_the_ones_flow_3_will_add()
+    public void Every_integration_event_has_a_consumer()
     {
         var handled = Compose()
             .Where(descriptor => descriptor.IsKeyedService && HandlerInterfaces.Contains(descriptor.ServiceType))
@@ -146,9 +148,9 @@ public class IntegrationEventHandlerCompositionTests
 
         var unhandled = KnownEventNames.Except(handled).OrderBy(name => name, StringComparer.Ordinal);
 
-        unhandled.Should().BeEquivalentTo(
-            new[] { "QuoteApproved", "QuotePublishable", "QuoteSubmitted" },
-            "these three are flow 3, which is planned for Day 31; anything ELSE appearing here is an event "
-            + "that lost its consumer, and this test is how that gets noticed");
+        unhandled.Should().BeEmpty(
+            "every contract in QuotesPlatform.Contracts is consumed by some module; an event listed here "
+            + "was either declared without a consumer or lost its registration, and in both cases the "
+            + "message is delivered, completed and silently dropped");
     }
 }
