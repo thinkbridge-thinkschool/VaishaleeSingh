@@ -14,20 +14,37 @@ namespace QuotesPlatform.Modules.Catalog.Infrastructure;
 /// that touches one. Program.cs calls MapCatalogEndpoints and stays exactly
 /// as short as AddCatalogModule keeps it.
 ///
-/// mark-publishable stands in for the full quote-moderation flow (Catalog ->
-/// Moderation -> QuotePublishable), which is explicitly deferred past today's
-/// happy path -- see Day29/docs/day29-plan.md.
+/// POST /api/quotes/{id}/mark-publishable IS GONE. It was Day 29's stand-in
+/// for the quote-moderation flow, and that flow now exists: submitting a quote
+/// announces QuoteSubmitted, Moderation opens a review, approving it publishes
+/// QuoteApproved, and QuoteApprovedHandler marks the quote publishable.
+///
+/// Removed rather than left alongside, because two ways to make a quote
+/// publishable is one way too many and only one of them leaves a Review
+/// recording who decided and when. A stand-in that outlives the thing it stood
+/// in for becomes the back door nobody audits.
 /// </summary>
 public static class CatalogEndpoints
 {
     public static IEndpointRouteBuilder MapCatalogEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapPost("/api/quotes", async (SubmitQuoteRequest request, IQuoteRepository repository, CancellationToken cancellationToken) =>
+        app.MapPost("/api/quotes", async (
+            SubmitQuoteRequest request, IQuoteRepository repository,
+            ICatalogIntegrationEventPublisher publisher, CancellationToken cancellationToken) =>
         {
             try
             {
                 var quote = Quote.Submit(request.Author, request.Text, request.SubmittedByUserId, DateTimeOffset.UtcNow);
                 await repository.AddAsync(quote, cancellationToken);
+
+                // Flow 3 starts here. Enqueued on the same DbContext the save
+                // below commits, so the quote and the request for a review
+                // land together or neither does -- a quote that exists with no
+                // review pending is a quote nobody will ever approve.
+                await publisher.EnqueueAsync(
+                    new QuoteSubmitted(Guid.NewGuid(), DateTimeOffset.UtcNow, quote.Id, request.SubmittedByUserId),
+                    cancellationToken);
+
                 await repository.SaveChangesAsync(cancellationToken);
 
                 return Results.Created($"/api/quotes/{quote.Id}", ToResponse(quote));
@@ -82,18 +99,6 @@ public static class CatalogEndpoints
             {
                 return Results.BadRequest(new { error = exception.Message });
             }
-        });
-
-        app.MapPost("/api/quotes/{id:guid}/mark-publishable", async (Guid id, IQuoteRepository repository, CancellationToken cancellationToken) =>
-        {
-            var quote = await repository.GetAsync(id, cancellationToken);
-            if (quote is null)
-                return Results.NotFound();
-
-            quote.MarkPublishable();
-            await repository.SaveChangesAsync(cancellationToken);
-
-            return Results.Ok(ToResponse(quote));
         });
 
         return app;
