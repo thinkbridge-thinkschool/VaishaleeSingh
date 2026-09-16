@@ -61,7 +61,11 @@ This is the password you passed as MSSQL_SA_PASSWORD to `docker run`.
 # cause -- "you already have one of these running" -- is the first line and is
 # gone off the top of the scrollback by the time you look. Say it here instead,
 # and name the process so it can be stopped without hunting through windows.
-$listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+# Select-Object -First 1 because a listener bound to both address families
+# comes back as two rows for one process, and without it the PID lands in the
+# message twice -- "Stop-Process -Id 30200 30200" -- which is not a command.
+$listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+    Select-Object -First 1
 if ($listener) {
     $owner = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
     $name  = if ($owner) { "$($owner.ProcessName) (PID $($owner.Id))" } else { "PID $($listener.OwningProcess)" }
