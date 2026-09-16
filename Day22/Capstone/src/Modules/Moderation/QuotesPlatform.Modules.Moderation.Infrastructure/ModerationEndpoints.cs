@@ -20,10 +20,23 @@ public static class ModerationEndpoints
 {
     public static IEndpointRouteBuilder MapModerationEndpoints(this IEndpointRouteBuilder app)
     {
+        // SUBJECT IS A PARAMETER, not a constant. It was hardcoded to Collection
+        // until flow 3 existed, which was correct for exactly as long as
+        // collection reviews were the only kind -- the same assumption, in the
+        // same module, that made the approve endpoint publish the wrong event.
+        // A quote review could not be found through this route at all: it
+        // returned 404 for a review that was open and pending.
+        //
+        // Defaulted rather than required, so Day 29's happy-path script and any
+        // existing caller keep working unchanged.
         app.MapGet("/api/reviews/by-subject/{subjectId:guid}", async (
-            Guid subjectId, IReviewRepository repository, CancellationToken cancellationToken) =>
+            Guid subjectId, IReviewRepository repository, CancellationToken cancellationToken,
+            string? subject = null) =>
         {
-            var review = await repository.GetPendingBySubjectAsync(ReviewSubject.Collection, subjectId, cancellationToken);
+            if (!TryParseSubject(subject, out var reviewSubject))
+                return Results.BadRequest(new { error = $"'{subject}' is not a review subject." });
+
+            var review = await repository.GetPendingBySubjectAsync(reviewSubject, subjectId, cancellationToken);
             return review is null ? Results.NotFound() : Results.Ok(ToResponse(review));
         });
 
@@ -35,9 +48,13 @@ public static class ModerationEndpoints
         // the route above, which Day 29's happy-path script calls and reads as
         // "is a review open yet".
         app.MapGet("/api/reviews/by-subject/{subjectId:guid}/latest", async (
-            Guid subjectId, IReviewRepository repository, CancellationToken cancellationToken) =>
+            Guid subjectId, IReviewRepository repository, CancellationToken cancellationToken,
+            string? subject = null) =>
         {
-            var review = await repository.GetLatestBySubjectAsync(ReviewSubject.Collection, subjectId, cancellationToken);
+            if (!TryParseSubject(subject, out var reviewSubject))
+                return Results.BadRequest(new { error = $"'{subject}' is not a review subject." });
+
+            var review = await repository.GetLatestBySubjectAsync(reviewSubject, subjectId, cancellationToken);
             return review is null ? Results.NotFound() : Results.Ok(ToResponse(review));
         });
 
@@ -100,6 +117,24 @@ public static class ModerationEndpoints
         {
             return Results.BadRequest(new { error = exception.Message });
         }
+    }
+
+    /// <summary>
+    /// Absent means Collection, which keeps every caller written before quote
+    /// reviews existed working unchanged. An unrecognised value is a 400 rather
+    /// than a silent fallback to Collection -- a typo that quietly searches the
+    /// wrong subject returns 404 for a review that exists, which is the most
+    /// confusing answer available.
+    /// </summary>
+    private static bool TryParseSubject(string? subject, out ReviewSubject parsed)
+    {
+        if (string.IsNullOrWhiteSpace(subject))
+        {
+            parsed = ReviewSubject.Collection;
+            return true;
+        }
+
+        return Enum.TryParse(subject, ignoreCase: true, out parsed);
     }
 
     private static ReviewResponse ToResponse(Review review) => new(
