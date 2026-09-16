@@ -1,0 +1,86 @@
+Day 30 -- all three async flows, run end to end
+16 September 2026
+
+Against SQL Server 2022 in Docker (container capstone-sql, recreated clean for
+this run) and the dev Azure Service Bus namespace sb-quotes-7mo4cimyk4vnk, with
+all four subscriptions provisioned including catalog-quote-decisions, which this
+run created.
+
+  ./Day29/scripts/00-provision-servicebus-topology.ps1
+  ./Day29/scripts/stop-host.ps1
+  ./Day29/scripts/run-host.ps1
+  ./Day29/verification/happy-path.ps1 -BaseUrl http://localhost:5080 -TimeoutSeconds 90
+
+---------------------------------------------------------------------------
+
+== Flow 3: Catalog submits three quotes, Moderation approves each ==
+  quote 63ae612a-a6d6-4d76-bd76-d1148032b9d2 publishable=True
+  quote 98bdbb8d-e1ef-494c-9a3f-7c01a0671a42 publishable=True
+  quote 1f773518-3293-4825-86c9-d4450edeff72 publishable=True
+== Commit 9: Curation -- create a collection and add all three quotes ==
+  collection 8fcbafdc-45a0-48e1-aef8-2a8d4de4c45c submitted for publication
+== Commit 10: waiting for Moderation to open a review (outbox -> Service Bus -> consumer) ==
+  review b3f682dc-4cb7-4cdc-8e26-1d36fc2e8f0e opened, outcome=Pending
+  review b3f682dc-4cb7-4cdc-8e26-1d36fc2e8f0e approved
+== Commit 11 + 12: waiting for the edition (Curation applies the approval, Publishing builds it) ==
+
+HAPPY PATH VERIFIED
+  Collection: 8fcbafdc-45a0-48e1-aef8-2a8d4de4c45c
+  Edition:    1 at slug 'day-29-happy-path-8fcbafdc'
+  Items:      3
+    [1] Author 1: Quote text number 1.
+    [2] Author 2: Quote text number 2.
+    [3] Author 3: Quote text number 3.
+
+---------------------------------------------------------------------------
+
+WHAT THE FIRST THREE LINES COST, AND WHY THEY ARE THE NEW PART
+
+On Day 29 those three lines were three synchronous POSTs to
+/api/quotes/{id}/mark-publishable -- a stand-in that set a flag directly,
+because the flow behind it did not exist. That endpoint is deleted.
+
+Each of those quotes now goes:
+
+  POST /api/quotes                 -> QuoteSubmitted written to the outbox
+    -> Catalog's relay publishes it
+      -> moderation-review-requests (filter widened today to admit it)
+        -> QuoteSubmittedHandler opens a Review
+  GET  /api/reviews/by-subject/{id}?subject=Quote    -- the script WAITS here
+  POST /api/reviews/{id}/approve   -> QuoteApproved, because the translator
+                                      reads review.Subject (fixed this morning,
+                                      before the code that needed it existed)
+    -> catalog-quote-decisions (a subscription that did not exist an hour ago)
+      -> QuoteApprovedHandler marks it publishable, publishes QuotePublishable
+        -> curation-review-decisions (filter also widened today)
+          -> QuotePublishableHandler mirrors the flag onto Curation's snapshots
+  GET  /api/quotes/{id}            -- the script WAITS for isPublishable
+
+Three broker hops per quote, nine before the collection work starts. The script
+waits on state rather than sleeping, so a wrong filter, a missing subscription
+or a dead relay surfaces here as a timeout rather than as a pass that breaks
+three steps later.
+
+WHAT THIS PROVES THAT THE INTEGRATION TESTS DO NOT
+
+QuotesPlatform.IntegrationTests runs every handler against a real database and
+deliberately stops at the handler boundary: no filters, no subscriptions, no
+delivery. Every failure that has cost this project real time lives in exactly
+that gap -- the Day 29 publisher collision, this morning's subscription filter,
+the topology that did not exist. This transcript is the only evidence covering
+it, which is why it is a deliverable rather than a screenshot.
+
+WHAT IT STILL DOES NOT COVER
+
+The rejection path and the revision loop are not in this script -- they are
+covered by the integration tests instead, against a real database but without
+the broker. A scripted reject-and-resubmit against live infrastructure is the
+obvious next addition, and it is named here rather than left for someone to
+notice its absence.
+
+KNOWN COSMETIC ISSUE, LEFT ALONE ON PURPOSE
+
+The section headers still read "Commit 9", "Commit 10", "Commit 11 + 12" from
+Day 29's commit numbering, which no longer corresponds to anything. Renaming
+them would mean this transcript no longer matched the script that produced it,
+and the transcript is the evidence. Relabel and re-run together, or not at all.

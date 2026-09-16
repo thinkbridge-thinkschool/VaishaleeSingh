@@ -46,9 +46,9 @@ public static class CatalogModuleRegistration
         services.TryAddSingleton(_ =>
             new ServiceBusClient(serviceBusFullyQualifiedNamespace, new DefaultAzureCredential()));
         services.AddHostedService<CatalogOutboxRelayService>();
+        services.AddHostedService<CatalogServiceBusConsumerHost>();
 
-        // Use-case handlers and the consumer messaging pieces are registered
-        // here as they are written (Day 29, commit 7 onward).
+        services.AddKeyedScoped<IIntegrationEventHandler, QuoteApprovedHandler>(nameof(QuoteApproved));
 
         return services;
     }

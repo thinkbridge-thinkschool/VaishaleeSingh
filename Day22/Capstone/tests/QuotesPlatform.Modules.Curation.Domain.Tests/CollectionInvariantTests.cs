@@ -318,4 +318,38 @@ public class CollectionInvariantTests
         collection.Approve(Now);
         return collection;
     }
+
+    /// <summary>
+    /// The sibling of the two quote-revision tests above. MarkQuotePublishable
+    /// is applied from a broadcast event exactly as ApplyQuoteRevision is, so
+    /// it gets the same pair of assertions: it reaches an editable collection
+    /// and stops at a published one.
+    /// </summary>
+    [Fact]
+    public void A_publishable_quote_updates_a_draft_but_not_a_published_collection()
+    {
+        var quoteId = Guid.NewGuid();
+
+        var draft = Collection.Create("A draft collection", Owner, Now);
+        draft.AddItem(quoteId, "Author", "Text.", isPublishable: false, Owner, Now);
+
+        draft.MarkQuotePublishable(quoteId);
+        draft.Items.Single().IsPublishable.Should().BeTrue();
+
+        var published = Collection.Create("A published collection", Owner, Now);
+        published.AddItem(quoteId, "Author", "Text.", isPublishable: true, Owner, Now);
+        published.AddItem(Guid.NewGuid(), "Author 2", "Text 2.", isPublishable: true, Owner, Now);
+        published.AddItem(Guid.NewGuid(), "Author 3", "Text 3.", isPublishable: true, Owner, Now);
+        published.SubmitForPublication(Owner, Now);
+        published.Approve(Now);
+
+        // Already true, so the assertion below cannot distinguish "guarded" from
+        // "applied"; flipping it first makes the guard the only thing that can
+        // keep it false.
+        var itemBefore = published.Items.Single(i => i.QuoteId == quoteId);
+        itemBefore.IsPublishable.Should().BeTrue("submission requires it");
+
+        published.MarkQuotePublishable(Guid.NewGuid());
+        published.State.Should().Be(CollectionState.Published, "a broadcast must not move a published collection");
+    }
 }

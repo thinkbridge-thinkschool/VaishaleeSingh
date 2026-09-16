@@ -257,9 +257,31 @@ public sealed class Collection : AggregateRoot<Guid>
         _items.FirstOrDefault(i => i.QuoteId == quoteId)?.RefreshSnapshot(author, text);
     }
 
-    /// <summary>Applied from the QuotePublishable integration event.</summary>
-    public void MarkQuotePublishable(Guid quoteId) =>
+    /// <summary>
+    /// Applied from the QuotePublishable integration event.
+    ///
+    /// Guarded on state for the same reason ApplyQuoteRevision is, and the
+    /// symmetry is the point rather than the behaviour: both are applied by
+    /// handlers sharing GetEditableByQuoteIdAsync, so both are already
+    /// protected by that query. Protecting only one of them in the aggregate
+    /// meant the pair relied on the query in one case and on the query AND the
+    /// aggregate in the other, and the whole argument for the double guard is
+    /// that a later widening of the query must not be able to break the rule.
+    /// A guard on one sibling and not the other is an invitation to assume the
+    /// query is enough.
+    ///
+    /// In practice this returns early for nothing today: a collection cannot
+    /// reach InReview or Published holding a quote that has not cleared review,
+    /// because SubmitForPublication refuses it. That is exactly why it is
+    /// cheap to be consistent here.
+    /// </summary>
+    public void MarkQuotePublishable(Guid quoteId)
+    {
+        if (State is not (CollectionState.Draft or CollectionState.Revising))
+            return;
+
         _items.FirstOrDefault(i => i.QuoteId == quoteId)?.MarkPublishable();
+    }
 
     private void Renumber()
     {

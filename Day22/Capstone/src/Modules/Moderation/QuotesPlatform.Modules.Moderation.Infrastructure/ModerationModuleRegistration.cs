@@ -50,6 +50,7 @@ public static class ModerationModuleRegistration
 
         services.AddKeyedScoped<IIntegrationEventHandler, CollectionSubmittedForPublicationHandler>(
             nameof(CollectionSubmittedForPublication));
+        services.AddKeyedScoped<IIntegrationEventHandler, QuoteSubmittedHandler>(nameof(QuoteSubmitted));
 
         return services;
     }

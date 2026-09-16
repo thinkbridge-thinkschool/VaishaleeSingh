@@ -98,19 +98,41 @@ function Invoke-Api {
     return Invoke-RestMethod -Method $Method -Uri $uri
 }
 
-Write-Host "== Commit 8: Catalog -- submit and publish three quotes =="
+Write-Host "== Flow 3: Catalog submits three quotes, Moderation approves each =="
+#
+# Day 30 DELETED POST /api/quotes/{id}/mark-publishable. It was a stand-in for
+# this flow while the flow did not exist; now that it does, there is one way to
+# make a quote publishable and it leaves a Review recording who decided.
+#
+# That makes this section genuinely asynchronous where it used to be a
+# synchronous poke: submitting a quote publishes QuoteSubmitted, Moderation's
+# consumer opens a Review, approving it publishes QuoteApproved, Catalog's
+# consumer marks the quote publishable and publishes QuotePublishable. Three
+# broker hops per quote, and the waits below are the only way any of them
+# happen.
 $quotes = 1..3 | ForEach-Object {
     $quote = Invoke-Api POST "/api/quotes" @{ Author = "Author $_"; Text = "Quote text number $_."; SubmittedByUserId = "curator-1" }
 
-    # Out-Null is load-bearing: mark-publishable returns the updated quote, so
-    # without it this response ALSO lands in the pipeline and $quotes holds six
-    # entries -- each quote twice. The add-item loop below then adds every
-    # QuoteId a second time and Collection.AddItem refuses it ("This quote is
-    # already in the collection"), which is a 400 and, with $ErrorActionPreference
-    # = Stop, the end of the run.
-    Invoke-Api POST "/api/quotes/$($quote.id)/mark-publishable" $null | Out-Null
+    $quoteReview = Wait-Until -Description "review opened for quote $($quote.id)" -Probe {
+        try { Invoke-Api GET "/api/reviews/by-subject/$($quote.id)?subject=Quote" } catch { $null }
+    }
 
-    Invoke-Api GET "/api/quotes/$($quote.id)"
+    # Out-Null on the decision for the same reason the old mark-publishable call
+    # needed it: the endpoint returns the updated review, and without this that
+    # response lands in the pipeline and $quotes holds six entries instead of
+    # three. The add-item loop below would then add every QuoteId twice, and
+    # Collection.AddItem refuses that with a 400 -- which, under
+    # $ErrorActionPreference = Stop, is the end of the run.
+    Invoke-Api POST "/api/reviews/$($quoteReview.id)/approve" @{ ReviewerId = "reviewer-1" } | Out-Null
+
+    # The quote is NOT publishable when approve returns. QuoteApproved has to
+    # reach Catalog first. Waiting on the flag rather than sleeping is what
+    # makes a broken relay or a wrong filter fail here as a timeout instead of
+    # passing and breaking three steps later.
+    Wait-Until -Description "quote $($quote.id) marked publishable" -Probe {
+        $current = Invoke-Api GET "/api/quotes/$($quote.id)"
+        if ($current.isPublishable) { $current } else { $null }
+    }
 }
 $quotes | ForEach-Object { Write-Host "  quote $($_.id) publishable=$($_.isPublishable)" }
 
