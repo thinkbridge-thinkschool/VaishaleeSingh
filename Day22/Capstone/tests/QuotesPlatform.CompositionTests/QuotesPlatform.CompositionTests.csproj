@@ -20,6 +20,7 @@
        BEHIND EF Core: Microsoft.Extensions.Logging 10.0.0 against EF Core
        10.0.10's own >= 10.0.10 is NU1605, a downgrade, and an error. -->
   <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
     <PackageReference Include="FluentAssertions" Version="7.0.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />

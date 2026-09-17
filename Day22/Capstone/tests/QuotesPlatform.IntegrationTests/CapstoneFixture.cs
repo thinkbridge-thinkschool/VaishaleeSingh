@@ -42,12 +42,23 @@ public sealed class CapstoneFixture : IAsyncLifetime
     // there: a guessed CU tag that does not exist fails every pull outright,
     // which is worse than the risk it guards against. If this suite ever fails
     // in a way that looks environment-specific rather than code-specific, pin it.
-    private readonly MsSqlContainer _container =
-        new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest").Build();
+    //
+    // Built through DockerRequired rather than directly, for the reason that
+    // file explains. Applied here as well as in ApiTests deliberately: both
+    // projects fail identically with Docker stopped, and a clear message from
+    // one of two identical fixtures is worse than none, because the next reader
+    // sees one legible failure beside a wall of stack traces and concludes the
+    // check is unreliable.
+    private MsSqlContainer _container = null!;
 
-    public Task InitializeAsync() => _container.StartAsync();
+    public async Task InitializeAsync()
+    {
+        _container = DockerRequired.Build("mcr.microsoft.com/mssql/server:2022-latest");
+        await _container.StartAsync();
+    }
 
-    public Task DisposeAsync() => _container.DisposeAsync().AsTask();
+    public Task DisposeAsync() =>
+        _container is null ? Task.CompletedTask : _container.DisposeAsync().AsTask();
 
     /// <summary>
     /// A FRESH DATABASE PER TEST, on the one shared container.
