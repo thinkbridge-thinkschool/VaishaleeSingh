@@ -38,7 +38,10 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('before', 'after')] [string] $Label,
+    # Free-form, because two runs turned out not to be enough: the index change
+    # and the AsNoTracking change landed separately, so each needs its own
+    # labelled transcript rather than being folded into one "after".
+    [Parameter(Mandatory)][ValidatePattern('^[a-z0-9][a-z0-9-]*$')] [string] $Label,
 
     [string] $BaseUrl = 'http://localhost:5080',
     [string] $Slug    = 'perf-probe-edition',
@@ -54,6 +57,10 @@ param(
     [string] $Database  = 'QuotesPlatform',
     [string] $SqlUser   = 'sa',
     [string] $SqlPassword = $env:CAPSTONE_SQL_PASSWORD,
+
+    # Falls back to the container's own sqlcmd when none is on PATH. See
+    # 01-seed-editions.ps1 for why this exists.
+    [string] $SqlContainer = 'capstone-sql',
 
     [string] $OutputDirectory = 'Day31/verification'
 )
@@ -73,9 +80,29 @@ $url = "$BaseUrl/api/editions/$Slug"
 # Fail early and loudly if the probe row is missing. A 404 measured at 20
 # connections for 30 seconds produces a beautiful p99 for an endpoint that did
 # no work, and nothing in bombardier's output says so.
-$probe = Invoke-WebRequest -Uri $url -Method Get -SkipHttpErrorCheck
-if ($probe.StatusCode -ne 200) {
-    throw "GET $url returned $($probe.StatusCode). Run 01-seed-editions.ps1 first -- measuring a 404 is measuring nothing."
+#
+# -SkipHttpErrorCheck would be the obvious way to read a non-200 without an
+# exception, and it is PowerShell 7 only -- on Windows PowerShell 5.1 the
+# parameter does not exist and the script dies before measuring anything. Both
+# versions put the response on the exception instead, so read it from there and
+# the probe works on either.
+$probeStatus = 0
+try {
+    $probe = Invoke-WebRequest -Uri $url -Method Get -UseBasicParsing
+    $probeStatus = [int] $probe.StatusCode
+}
+catch {
+    $response = $_.Exception.Response
+    if ($response -and $response.StatusCode) {
+        $probeStatus = [int] $response.StatusCode
+    }
+    else {
+        throw "GET $url did not answer at all: $($_.Exception.Message)`nIs the Host running on $BaseUrl?"
+    }
+}
+
+if ($probeStatus -ne 200) {
+    throw "GET $url returned $probeStatus. Run 01-seed-editions.ps1 first -- measuring a 404 is measuring nothing."
 }
 
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
@@ -113,8 +140,10 @@ Write-Host "Saved $transcript"
 if (-not [string]::IsNullOrWhiteSpace($SqlPassword)) {
     $planFile = Join-Path $OutputDirectory "plan-$Label.txt"
 
+    # SET SHOWPLAN_TEXT has to be the ONLY statement in its batch -- pairing it
+    # with SET NOCOUNT ON, as the first version did, fails with msg 1067 and no
+    # plan is captured.
     $planQuery = @"
-SET NOCOUNT ON;
 SET SHOWPLAN_TEXT ON;
 GO
 SELECT TOP 1 e.Id, e.CollectionId, e.EditionNumber, e.Name, e.Slug, e.OwnerId, e.PublishedAt
@@ -124,7 +153,21 @@ ORDER BY e.EditionNumber DESC;
 GO
 "@
 
-    $plan = & sqlcmd -S $SqlServer -U $SqlUser -P $SqlPassword -d $Database -C -b -Q $planQuery 2>&1
+    if (Get-Command sqlcmd -ErrorAction SilentlyContinue) {
+        $previous = $env:SQLCMDPASSWORD
+        $env:SQLCMDPASSWORD = $SqlPassword
+        try {
+            $plan = & sqlcmd -S $SqlServer -U $SqlUser -d $Database -C -b -Q $planQuery 2>&1
+        }
+        finally { $env:SQLCMDPASSWORD = $previous }
+    }
+    else {
+        # The container's own client. SQLCMDPASSWORD rather than -P so the
+        # password stays out of the exec's argv and the host process list.
+        $plan = & docker exec -e "SQLCMDPASSWORD=$SqlPassword" $SqlContainer `
+            /opt/mssql-tools18/bin/sqlcmd -S localhost -U $SqlUser -d $Database -C -b -Q $planQuery 2>&1
+    }
+
     if ($LASTEXITCODE -eq 0) {
         $plan | Set-Content -Path $planFile -Encoding utf8
         Write-Host "Saved $planFile"

@@ -1,0 +1,174 @@
+﻿Day 31 -- p99 of the hottest path (current-return-2)
+2026-09-17 11:18:11
+
+Endpoint : GET /api/editions/perf-probe-edition
+Load     : bombardier -c 20 -d 30s --timeout 120s -l
+Warm-up  : 5s at the same concurrency, discarded
+Bombarding http://localhost:5080/api/editions/perf-probe-edition for 30s using 20 connection(s)
+
+
+
+
+
+
+ 00m29s
+ 00m29s
+ 00m28s
+ 00m28s
+ 00m28s
+ 00m28s
+ 00m27s
+ 00m27s
+ 00m27s
+ 00m27s
+ 00m27s
+ 00m26s
+ 00m26s
+ 00m26s
+ 00m26s
+ 00m26s
+ 00m25s
+ 00m25s
+ 00m25s
+ 00m25s
+ 00m25s
+ 00m24s
+ 00m24s
+ 00m24s
+ 00m24s
+ 00m24s
+ 00m23s
+ 00m23s
+ 00m23s
+ 00m23s
+ 00m23s
+ 00m22s
+ 00m22s
+ 00m22s
+ 00m22s
+ 00m22s
+ 00m21s
+ 00m21s
+ 00m21s
+ 00m21s
+ 00m21s
+ 00m20s
+ 00m20s
+ 00m20s
+ 00m20s
+ 00m20s
+ 00m19s
+ 00m19s
+ 00m19s
+ 00m19s
+ 00m19s
+ 00m18s
+ 00m18s
+ 00m18s
+ 00m18s
+ 00m18s
+ 00m17s
+ 00m17s
+ 00m17s
+ 00m17s
+ 00m17s
+ 00m16s
+ 00m16s
+ 00m16s
+ 00m16s
+ 00m16s
+ 00m15s
+ 00m15s
+ 00m15s
+ 00m15s
+ 00m15s
+ 00m14s
+ 00m14s
+ 00m14s
+ 00m14s
+ 00m14s
+ 00m13s
+ 00m13s
+ 00m13s
+ 00m13s
+ 00m13s
+ 00m12s
+ 00m12s
+ 00m12s
+ 00m12s
+ 00m12s
+ 00m11s
+ 00m11s
+ 00m11s
+ 00m11s
+ 00m11s
+ 00m10s
+ 00m10s
+ 00m10s
+ 00m10s
+ 00m10s
+ 00m09s
+ 00m09s
+ 00m09s
+ 00m09s
+ 00m09s
+ 00m08s
+ 00m08s
+ 00m08s
+ 00m08s
+ 00m08s
+ 00m07s
+ 00m07s
+ 00m07s
+ 00m07s
+ 00m07s
+ 00m06s
+ 00m06s
+ 00m06s
+ 00m06s
+ 00m06s
+ 00m05s
+ 00m05s
+ 00m05s
+ 00m05s
+ 00m05s
+ 00m04s
+ 00m04s
+ 00m04s
+ 00m04s
+ 00m04s
+ 00m03s
+ 00m03s
+ 00m03s
+ 00m03s
+ 00m03s
+ 00m02s
+ 00m02s
+ 00m02s
+ 00m02s
+ 00m02s
+ 00m01s
+ 00m01s
+ 00m01s
+ 00m01s
+ 00m01s
+
+
+
+
+
+ 30s
+Done!
+Statistics        Avg      Stdev        Max
+  Reqs/sec      1698.28     908.48    4385.48
+  Latency       11.79ms    12.58ms   272.15ms
+  Latency Distribution
+     50%     7.95ms
+     75%     9.85ms
+     90%    15.46ms
+     95%    31.88ms
+     99%   101.94ms
+  HTTP codes:
+    1xx - 0, 2xx - 50791, 3xx - 0, 4xx - 0, 5xx - 0
+    others - 0
+  Throughput:     4.72MB/s

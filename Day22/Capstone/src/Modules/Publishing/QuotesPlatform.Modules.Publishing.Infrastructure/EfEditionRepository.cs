@@ -9,17 +9,19 @@ namespace QuotesPlatform.Modules.Publishing.Infrastructure;
 /// work runs on -- see IEditionRepository.SaveChangesAsync for why there is
 /// one SaveChanges per aggregate rather than one per repository call.
 ///
-/// BOTH READS ARE AsNoTracking, AND EDITION IS THE ONE TYPE WHERE THAT NEEDS NO
-/// JUDGEMENT. It is immutable by construction -- no setters, no mutating
-/// methods, and the only way one comes into existence is
-/// CollectionPublishedHandler calling AddAsync with a fresh instance. Nothing
-/// in this module ever loads an Edition in order to change it, so tracking one
-/// buys identity-map and change-detection work for a result that can never be
-/// saved.
+/// BOTH READS ARE AsNoTracking, AND THAT IS SAFE HERE FOR A SPECIFIC REASON
+/// rather than because no-tracking reads are generally faster.
 ///
-/// GetLatestBySlugAsync is also the hottest path in the capstone: every other
-/// endpoint is a curator or reviewer action, and this is the only one readers
-/// hit. One write, unbounded reads.
+/// An Edition is write-once. The only way one comes into existence is
+/// CollectionPublishedHandler reacting to CollectionPublished and calling
+/// AddAsync; PublishingEndpoints exposes a single GET and no write route, and
+/// nothing in this module loads an Edition in order to change it.
+///
+/// That matters because AsNoTracking on a read whose result IS later mutated
+/// fails silently: SaveChangesAsync finds nothing to update and returns 0, the
+/// call succeeds, and the write is simply lost. It is correct only while the
+/// aggregate stays write-once -- if an Edition ever grows an update path, this
+/// is the first line that has to be revisited.
 /// </summary>
 public sealed class EfEditionRepository(PublishingDbContext db) : IEditionRepository
 {
@@ -29,6 +31,12 @@ public sealed class EfEditionRepository(PublishingDbContext db) : IEditionReposi
             .Include(e => e.Items)
             .FirstOrDefaultAsync(e => e.Id == id, cancellationToken);
 
+    /// <summary>
+    /// The hottest path in the solution: every GET /api/editions/{slug} lands
+    /// here. Twenty items per edition means twenty-one entities the change
+    /// tracker would otherwise snapshot and hold for the life of the request,
+    /// for a response that is serialised and immediately discarded.
+    /// </summary>
     public Task<Edition?> GetLatestBySlugAsync(string slug, CancellationToken cancellationToken = default) =>
         db.Editions
             .AsNoTracking()
