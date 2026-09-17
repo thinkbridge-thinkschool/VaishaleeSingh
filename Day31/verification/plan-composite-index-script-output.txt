@@ -1,0 +1,16 @@
+﻿StmtText                                                                                                                                                                                    
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+SELECT TOP 1 e.Id, e.CollectionId, e.EditionNumber, e.Name, e.Slug, e.OwnerId, e.PublishedAt
+FROM publishing.Editions e
+WHERE e.Slug = 'perf-probe-edition'
+ORDER BY e.EditionNumber DESC;  
+
+(1 rows affected)
+StmtText                                                                                                                                                                                                      
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  |--Top(TOP EXPRESSION:((1)))                                                                                                                                                                                
+       |--Nested Loops(Inner Join, OUTER REFERENCES:([e].[Id]))                                                                                                                                               
+            |--Index Seek(OBJECT:([QuotesPlatform].[publishing].[Editions].[IX_Editions_Slug_EditionNumber] AS [e]), SEEK:([e].[Slug]=N'perf-probe-edition') ORDERED FORWARD)                                 
+            |--Clustered Index Seek(OBJECT:([QuotesPlatform].[publishing].[Editions].[PK_Editions] AS [e]), SEEK:([e].[Id]=[QuotesPlatform].[publishing].[Editions].[Id] as [e].[Id]) LOOKUP ORDERED FORWARD) 
+
+(4 rows affected)

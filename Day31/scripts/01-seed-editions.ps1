@@ -45,6 +45,10 @@ param(
     [string] $SqlUser   = 'sa',
     [string] $SqlPassword = $env:CAPSTONE_SQL_PASSWORD,
 
+    # The SQL Server container. Used when sqlcmd is not installed on the host --
+    # see Resolve-SqlCmd, which is why this script needs nothing installed.
+    [string] $SqlContainer = 'capstone-sql',
+
     [int] $Editions = 5000,
     [int] $ItemsPerEdition = 20,
 
@@ -65,11 +69,72 @@ No SQL password. Supply one of:
 '@
 }
 
+# NO HOST-SIDE INSTALL REQUIRED, and that is deliberate.
+#
+# The first version of this script called sqlcmd directly and assumed it was on
+# PATH. It is not, on a machine without the SQL client tools or winget -- and
+# sending someone to find an installer for a tool they already have is a poor
+# trade. The mssql/server:2022 image ships sqlcmd at /opt/mssql-tools18/bin, so
+# the container running the database already carries the client for it.
+#
+# Host sqlcmd wins when present (fewer moving parts, and it works against a SQL
+# Server that is not in a container at all); otherwise fall through to the
+# container's own copy. Resolved once, because `docker ps` per statement would
+# be a process launch per query.
+$script:SqlCmdMode = $null
+
+function Resolve-SqlCmd {
+    if ($script:SqlCmdMode) { return $script:SqlCmdMode }
+
+    if (Get-Command sqlcmd -ErrorAction SilentlyContinue) {
+        $script:SqlCmdMode = @{ Kind = 'host'; Server = $SqlServer }
+    }
+    elseif ((& docker ps --filter "name=^/$SqlContainer$" --format '{{.Names}}' 2>$null) -eq $SqlContainer) {
+        # Inside the container the server is plain localhost -- the host's
+        # published port mapping does not apply there.
+        $script:SqlCmdMode = @{ Kind = 'docker'; Server = 'localhost' }
+        Write-Host "Using sqlcmd inside container '$SqlContainer' (none on PATH)."
+    }
+    else {
+        throw @"
+No way to reach SQL Server.
+
+Neither is available:
+  * sqlcmd on PATH
+  * a running container named '$SqlContainer'
+
+Start the container:
+  docker run -d --name $SqlContainer -e "ACCEPT_EULA=Y" ``
+    -e "MSSQL_SA_PASSWORD=`$env:CAPSTONE_SQL_PASSWORD" ``
+    -p 1433:1433 mcr.microsoft.com/mssql/server:2022-latest
+"@
+    }
+
+    return $script:SqlCmdMode
+}
+
 function Invoke-Sql {
     param([string] $Query, [int] $TimeoutSeconds = 600)
 
-    $output = & sqlcmd -S $SqlServer -U $SqlUser -P $SqlPassword -d $Database `
-        -C -b -t $TimeoutSeconds -Q $Query 2>&1
+    $mode = Resolve-SqlCmd
+
+    # The password goes through SQLCMDPASSWORD rather than -P. On the docker
+    # path that keeps it out of the exec's argv, where any other process on the
+    # machine could read it out of the process list.
+    if ($mode.Kind -eq 'host') {
+        $previous = $env:SQLCMDPASSWORD
+        $env:SQLCMDPASSWORD = $SqlPassword
+        try {
+            $output = & sqlcmd -S $mode.Server -U $SqlUser -d $Database `
+                -C -b -t $TimeoutSeconds -Q $Query 2>&1
+        }
+        finally { $env:SQLCMDPASSWORD = $previous }
+    }
+    else {
+        $output = & docker exec -e "SQLCMDPASSWORD=$SqlPassword" $SqlContainer `
+            /opt/mssql-tools18/bin/sqlcmd -S $mode.Server -U $SqlUser -d $Database `
+            -C -b -t $TimeoutSeconds -Q $Query 2>&1
+    }
 
     if ($LASTEXITCODE -ne 0) {
         throw "sqlcmd failed:`n$output"
