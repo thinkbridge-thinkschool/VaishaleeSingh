@@ -367,34 +367,48 @@ jobs:
         run: |
           import glob, sys, xml.etree.ElementTree as ET
 
-          # Chosen from the measured number rather than picked from the air:
-          # set this to a few points BELOW whatever the first green run reports,
-          # so it catches a real regression without failing on rounding.
-          THRESHOLD = 55.0
+          # Set from the first measured run (76.97% union), with margin for the
+          # Release/Linux build differing slightly from a local Debug one.
+          THRESHOLD = 72.0
 
           reports = glob.glob('**/TestResults/**/coverage.cobertura.xml', recursive=True)
           if not reports:
               print('::error::No coverage report was produced. The gate cannot pass by finding nothing.')
               sys.exit(1)
 
-          covered = total = 0
+          # MERGE BY (file, line) RATHER THAN SUMMING THE REPORTS.
+          #
+          # Six test projects each instrument the whole solution, so ApiTests,
+          # IntegrationTests and CompositionTests all report the SAME ~9,300
+          # production lines. Adding their totals counts those lines three times
+          # and lets a project that touches little of the code drag the figure
+          # down for no real reason: CompositionTests runs 6 tests and covers
+          # 2.98% of everything it instruments, and summing put a third of the
+          # denominator at that rate.
+          #
+          # Measured both ways on the first green run: summing gave 47.76%,
+          # merging gave 76.97%. The first number describes report overlap,
+          # not how much of the capstone is tested.
+          lines = {}
           for report in reports:
               root = ET.parse(report).getroot()
               for cls in root.iter('class'):
+                  filename = cls.get('filename') or ''
                   for line in cls.iter('line'):
-                      total += 1
-                      if int(line.get('hits', '0')) > 0:
-                          covered += 1
+                      key = (filename, line.get('number'))
+                      lines[key] = lines.get(key, False) or int(line.get('hits', '0')) > 0
 
+          total = len(lines)
           if total == 0:
               print('::error::Coverage reports contained no lines. Treating as a failure, not a pass.')
               sys.exit(1)
 
+          covered = sum(1 for hit in lines.values() if hit)
           percent = 100.0 * covered / total
-          print(f'Capstone line coverage: {percent:.2f}% ({covered}/{total}) across {len(reports)} report(s)')
+          print(f'Capstone line coverage: {percent:.2f}% ({covered}/{total} unique lines) across {len(reports)} report(s)')
 
           with open('capstone-coverage.md', 'w') as summary:
-              summary.write(f'## Capstone coverage\n\n**{percent:.2f}%** ({covered}/{total} lines)\n')
+              summary.write(f'## Capstone coverage\n\n**{percent:.2f}%** ({covered}/{total} unique lines)\n')
 
           if percent < THRESHOLD:
               print(f'::error::Coverage {percent:.2f}% is below the required {THRESHOLD}% threshold.')
