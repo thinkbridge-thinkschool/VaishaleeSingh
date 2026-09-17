@@ -46,3 +46,18 @@ app.MapModerationEndpoints();
 app.MapPublishingEndpoints();
 
 app.Run();
+
+/// <summary>
+/// WHY THIS EMPTY CLASS EXISTS.
+///
+/// Program.cs uses top-level statements, so the compiler generates an
+/// INTERNAL Program class. WebApplicationFactory&lt;Program&gt; needs it to be
+/// accessible, and without this declaration QuotesPlatform.ApiTests does not
+/// compile -- the error names Program rather than the accessibility, which is
+/// why it is worth a comment rather than a one-liner.
+///
+/// The alternative is [assembly: InternalsVisibleTo("QuotesPlatform.ApiTests")],
+/// which opens every internal in the Host to the test project rather than the
+/// one type the test framework actually needs. This is the narrower of the two.
+/// </summary>
+public partial class Program;

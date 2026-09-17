@@ -40,9 +40,22 @@ public sealed class EditionConfiguration : IEntityTypeConfiguration<Edition>
         // One collection cannot publish the same edition number twice.
         builder.HasIndex(e => new { e.CollectionId, e.EditionNumber }).IsUnique();
 
-        // Slug is stable per collection across editions (see Edition.Slug),
-        // so this is a lookup index, not a uniqueness constraint.
-        builder.HasIndex(e => e.Slug);
+        // Slug is stable per collection across editions (see Edition.Slug), so
+        // this is a lookup index and not a uniqueness constraint.
+        //
+        // COMPOSITE, AND DESCENDING ON THE SECOND COLUMN, because the hot query
+        // does both things: GetLatestBySlugAsync filters on Slug and then orders
+        // by EditionNumber descending to take the newest. A Slug-only index lets
+        // SQL Server seek the slug and then makes it sort the matches; ordering
+        // the index the way the query reads it turns that into a seek plus a
+        // top-1, with no sort operator in the plan at all.
+        //
+        // It also still serves any Slug-only lookup, since Slug is the leading
+        // column -- which is why the standalone index it replaces is gone rather
+        // than kept alongside. Two indexes where one suffices is write cost on
+        // every publish for no read benefit.
+        builder.HasIndex(e => new { e.Slug, e.EditionNumber })
+            .IsDescending(false, true);
 
         builder.OwnsMany(e => e.Items, item =>
         {
