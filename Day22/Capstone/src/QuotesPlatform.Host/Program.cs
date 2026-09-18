@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using QuotesPlatform.Modules.Catalog.Infrastructure;
 using QuotesPlatform.Modules.Curation.Infrastructure;
 using QuotesPlatform.Modules.Moderation.Infrastructure;
@@ -29,6 +31,90 @@ if (string.IsNullOrWhiteSpace(serviceBusNamespace))
     throw new InvalidOperationException(
         "ServiceBus:FullyQualifiedNamespace is not set. Supply it via user-secrets or environment configuration.");
 
+// AUTHENTICATION -- added Day 32, the day this became reachable from the
+// internet. ADR-0003 accepted the missing authentication "until 2026-10-31, or
+// immediately on first deployment to any shared environment, whichever comes
+// first", on the explicit argument that there was no attacker because there was
+// no route. Deploying creates the route, so the acceptance ended here.
+//
+// Fails fast like the two above, and for a sharper reason: a Host that starts
+// without an authority configured cannot validate a token, and the failure mode
+// of "cannot validate" must never be "let it through".
+var authority = builder.Configuration["AzureAd:Authority"];
+if (string.IsNullOrWhiteSpace(authority))
+    throw new InvalidOperationException(
+        "AzureAd:Authority is not set (e.g. https://login.microsoftonline.com/<tenant-id>/v2.0). " +
+        "The API cannot validate tokens without it and will not start unauthenticated.");
+
+var audience = builder.Configuration["AzureAd:Audience"];
+if (string.IsNullOrWhiteSpace(audience))
+    throw new InvalidOperationException(
+        "AzureAd:Audience is not set (e.g. api://<api-client-id>). Without it any correctly signed " +
+        "token from the tenant would be accepted, including one issued for a different application.");
+
+// PLAIN JwtBearer RATHER THAN Microsoft.Identity.Web, on purpose. Entra tokens
+// validate against an authority and an audience; Identity.Web adds a package
+// family, its own configuration shape and claim remapping to do the same job.
+// One dependency at a version this repository already uses beats four at
+// versions nobody here has run.
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.Authority = authority;
+        options.Audience = audience;
+
+        // Keep claims named as the token names them -- `oid`, `sub` -- rather
+        // than rewriting them to long SOAP-era URIs. CallerIdentity looks for
+        // `oid`, and a claim silently renamed under it is the kind of failure
+        // that reads as "the owner cannot edit their own collection".
+        options.MapInboundClaims = false;
+
+        options.TokenValidationParameters.ValidateIssuer = true;
+        options.TokenValidationParameters.ValidateAudience = true;
+        options.TokenValidationParameters.ValidateLifetime = true;
+
+        // VALID AUDIENCES SET EXPLICITLY, not left to options.Audience.
+        //
+        // Setting options.Audience is supposed to be copied into
+        // TokenValidationParameters.ValidAudience by JwtBearer's post-configure
+        // step. On the deployed .NET 10 host it was not: every request was
+        // refused with
+        //     WWW-Authenticate: Bearer error="invalid_token",
+        //     error_description="The audience '(null)' is invalid"
+        // -- (null) being the CONFIGURED audience, not the token's. The token
+        // was correct; the validator had nothing to compare it against.
+        //
+        // Both forms are accepted because Entra issues either depending on the
+        // application's accessTokenAcceptedVersion: the App ID URI for v2
+        // tokens, and sometimes the bare client id. Accepting both means a
+        // change to that setting cannot silently break authentication -- which
+        // it already did once today, in the other direction, via the issuer.
+        options.TokenValidationParameters.ValidAudiences =
+        [
+            audience,
+            audience.Replace("api://", string.Empty, StringComparison.Ordinal)
+        ];
+
+        // The default is five minutes, which means a token stays usable for
+        // five minutes after it expires. Small, but this guards an audit trail.
+        options.TokenValidationParameters.ClockSkew = TimeSpan.FromSeconds(30);
+    });
+
+// DEFAULT DENY. Every endpoint requires an authenticated caller unless it says
+// otherwise, and exactly one says otherwise (/health, below).
+//
+// The alternative -- .RequireAuthorization() on each of the twelve routes --
+// was rejected because it fails OPEN: the day someone adds a thirteenth
+// endpoint and forgets the call, that endpoint is public and nothing says so.
+// This way the same mistake produces a 401 and a bug report, not a breach.
+builder.Services.AddAuthorization(options =>
+{
+    options.FallbackPolicy = new AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .Build();
+});
+
 builder.Services.AddCatalogModule(connectionString, serviceBusNamespace);
 builder.Services.AddCurationModule(connectionString, serviceBusNamespace);
 builder.Services.AddPublishingModule(connectionString, serviceBusNamespace);
@@ -36,9 +122,16 @@ builder.Services.AddModerationModule(connectionString, serviceBusNamespace);
 
 var app = builder.Build();
 
+app.UseAuthentication();
+app.UseAuthorization();
+
 // Endpoints are mapped per module as the slices are built (Day 29 onwards).
 // Health is here because it is the Host's own concern, not any module's.
-app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+//
+// The ONE anonymous endpoint. Container Apps probes it before a revision is
+// allowed to take traffic, and a probe cannot carry a token. It returns a
+// constant and touches neither the database nor any aggregate.
+app.MapGet("/health", () => Results.Ok(new { status = "ok" })).AllowAnonymous();
 
 app.MapCatalogEndpoints();
 app.MapCurationEndpoints();
