@@ -74,6 +74,28 @@ builder.Services
         options.TokenValidationParameters.ValidateAudience = true;
         options.TokenValidationParameters.ValidateLifetime = true;
 
+        // VALID AUDIENCES SET EXPLICITLY, not left to options.Audience.
+        //
+        // Setting options.Audience is supposed to be copied into
+        // TokenValidationParameters.ValidAudience by JwtBearer's post-configure
+        // step. On the deployed .NET 10 host it was not: every request was
+        // refused with
+        //     WWW-Authenticate: Bearer error="invalid_token",
+        //     error_description="The audience '(null)' is invalid"
+        // -- (null) being the CONFIGURED audience, not the token's. The token
+        // was correct; the validator had nothing to compare it against.
+        //
+        // Both forms are accepted because Entra issues either depending on the
+        // application's accessTokenAcceptedVersion: the App ID URI for v2
+        // tokens, and sometimes the bare client id. Accepting both means a
+        // change to that setting cannot silently break authentication -- which
+        // it already did once today, in the other direction, via the issuer.
+        options.TokenValidationParameters.ValidAudiences =
+        [
+            audience,
+            audience.Replace("api://", string.Empty, StringComparison.Ordinal)
+        ];
+
         // The default is five minutes, which means a token stays usable for
         // five minutes after it expires. Small, but this guards an audit trail.
         options.TokenValidationParameters.ClockSkew = TimeSpan.FromSeconds(30);
