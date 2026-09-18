@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -29,12 +30,19 @@ public static class CatalogEndpoints
     public static IEndpointRouteBuilder MapCatalogEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapPost("/api/quotes", async (
-            SubmitQuoteRequest request, IQuoteRepository repository,
+            SubmitQuoteRequest request, ClaimsPrincipal user, IQuoteRepository repository,
             ICatalogIntegrationEventPublisher publisher, CancellationToken cancellationToken) =>
         {
+            // Author is the person QUOTED and stays in the body -- it is data.
+            // The submitter is the person CALLING, and that is the token's to
+            // say. The two were adjacent strings in one record until today,
+            // which is how a field nobody could forge sat next to one anybody
+            // could, looking identical.
+            var submittedBy = user.ActorId();
+
             try
             {
-                var quote = Quote.Submit(request.Author, request.Text, request.SubmittedByUserId, DateTimeOffset.UtcNow);
+                var quote = Quote.Submit(request.Author, request.Text, submittedBy, DateTimeOffset.UtcNow);
                 await repository.AddAsync(quote, cancellationToken);
 
                 // Flow 3 starts here. Enqueued on the same DbContext the save
@@ -42,7 +50,7 @@ public static class CatalogEndpoints
                 // land together or neither does -- a quote that exists with no
                 // review pending is a quote nobody will ever approve.
                 await publisher.EnqueueAsync(
-                    new QuoteSubmitted(Guid.NewGuid(), DateTimeOffset.UtcNow, quote.Id, request.SubmittedByUserId),
+                    new QuoteSubmitted(Guid.NewGuid(), DateTimeOffset.UtcNow, quote.Id, submittedBy),
                     cancellationToken);
 
                 await repository.SaveChangesAsync(cancellationToken);
@@ -108,7 +116,12 @@ public static class CatalogEndpoints
         quote.Id, quote.Author, quote.Text, quote.IsPublishable, quote.SubmittedByUserId, quote.CreatedAt);
 }
 
-public sealed record SubmitQuoteRequest(string Author, string Text, string SubmittedByUserId);
+/// <summary>
+/// Author is the person being quoted. The submitter is no longer here -- it
+/// comes from the token, because "who added this to the catalogue" is a fact
+/// about the caller and was forgeable while it lived in this record.
+/// </summary>
+public sealed record SubmitQuoteRequest(string Author, string Text);
 
 public sealed record ReviseQuoteRequest(string Author, string Text);
 
