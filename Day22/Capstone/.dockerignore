@@ -1,0 +1,31 @@
+# Build output. WITHOUT THIS the context uploaded to ACR includes every bin/
+# and obj/ in the solution -- tens of megabytes of DLLs that the image is
+# about to rebuild from source anyway.
+#
+# The subtler cost is the layer cache. The Dockerfile copies .csproj files and
+# restores BEFORE copying source, so an edit to a .cs file re-runs the build
+# but not the restore. Local build output in the context defeats that: obj/
+# changes on every local build, the copied layer's hash changes, and every
+# deploy pays for a full restore it did not need.
+**/bin/
+**/obj/
+**/TestResults/
+
+# Tests are not in the image and must not be. They reference Testcontainers,
+# which would look for a Docker daemon that does not exist inside a container.
+tests/
+
+# Local tooling and editor state.
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Never in an image.
+**/*.env
+**/appsettings.Development.json
+**/*.pfx
+**/*.key
+.git/
+.gitignore

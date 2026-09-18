@@ -14,4 +14,11 @@
     <ProjectReference Include="..\Modules\Moderation\QuotesPlatform.Modules.Moderation.Infrastructure\QuotesPlatform.Modules.Moderation.Infrastructure.csproj" />
   </ItemGroup>
 
+  <!-- Day 32: the Host validates Entra tokens. Plain JwtBearer rather than the
+       Microsoft.Identity.Web package family: Entra tokens validate against an
+       authority and an audience, and this is one dependency at the 10.0.10 the
+       rest of this repository already uses. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.10" />
+  </ItemGroup>
 </Project>

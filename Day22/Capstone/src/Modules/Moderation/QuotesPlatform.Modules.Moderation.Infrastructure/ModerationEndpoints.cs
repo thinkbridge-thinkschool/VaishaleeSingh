@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -64,19 +65,26 @@ public static class ModerationEndpoints
             return review is null ? Results.NotFound() : Results.Ok(ToResponse(review));
         });
 
+        // DAY 32: THE REVIEWER COMES FROM THE TOKEN. This is the single most
+        // important line changed today. Review exists to answer "who decided
+        // this" -- its own doc comment says collapsing it into Collection would
+        // make "who rejected edition 3" unanswerable -- and until now it
+        // recorded whatever string the caller typed into ReviewerId. An audit
+        // trail writable by the person it incriminates is worse than no audit
+        // trail, because it gets believed.
         app.MapPost("/api/reviews/{id:guid}/approve", (
-            Guid id, ApproveReviewRequest request, IReviewRepository repository,
+            Guid id, ClaimsPrincipal user, IReviewRepository repository,
             IModerationIntegrationEventPublisher publisher, CancellationToken cancellationToken) =>
             DecideAsync(
                 id, repository, publisher, cancellationToken,
-                review => review.Approve(request.ReviewerId, DateTimeOffset.UtcNow)));
+                review => review.Approve(user.ActorId(), DateTimeOffset.UtcNow)));
 
         app.MapPost("/api/reviews/{id:guid}/reject", (
-            Guid id, RejectReviewRequest request, IReviewRepository repository,
+            Guid id, RejectReviewRequest request, ClaimsPrincipal user, IReviewRepository repository,
             IModerationIntegrationEventPublisher publisher, CancellationToken cancellationToken) =>
             DecideAsync(
                 id, repository, publisher, cancellationToken,
-                review => review.Reject(request.ReviewerId, request.Reason, DateTimeOffset.UtcNow)));
+                review => review.Reject(user.ActorId(), request.Reason, DateTimeOffset.UtcNow)));
 
         return app;
     }
@@ -142,13 +150,19 @@ public static class ModerationEndpoints
         review.ReviewerId, review.Reason, review.OpenedAt, review.DecidedAt);
 }
 
-public sealed record ApproveReviewRequest(string ReviewerId);
+// ApproveReviewRequest is GONE. Its only field was ReviewerId, which now comes
+// from the token, so the approve endpoint takes no body at all. An empty record
+// kept "for symmetry" with reject would be a shape inviting someone to put an
+// identity back into it.
 
 /// <summary>
 /// Reason is not optional, and Review.Reject rejects a blank one -- a
 /// rejection a curator cannot act on wastes the whole review round trip.
+///
+/// ReviewerId is no longer here: who rejected is the token's to say, not the
+/// request's. Reason is genuinely the caller's and stays.
 /// </summary>
-public sealed record RejectReviewRequest(string ReviewerId, string Reason);
+public sealed record RejectReviewRequest(string Reason);
 
 public sealed record ReviewResponse(
     Guid Id, string Subject, Guid SubjectId, string Outcome,
