@@ -1,4 +1,4 @@
-// Day 24 — dev parameter file, retargeted at a new subscription.
+// Dev parameter file, retargeted at a new subscription AND a new tenant.
 //
 // Run it:
 //   az deployment sub what-if -l <region> -f infra/main.bicep -p infra/main.dev.bicepparam
@@ -6,38 +6,45 @@
 // NOTE: azd does not read this file. azd reads main.parameters.json only.
 //
 // ---------------------------------------------------------------------------
-// WHY THIS FILE CHANGED WHOLESALE ON DAY 24
+// WHY THIS FILE CHANGED WHOLESALE — THE 2026-09 MIGRATION
 // ---------------------------------------------------------------------------
-// Day 23's version of this file was written against subscription
-// 80d20ef9-8bfa-45d7-a9d8-b6cf1f0c791e in tenant f774bb68-…, and most of its
-// header explained a collision with two earlier deployments in that
-// subscription. Its credits are exhausted, so everything now targets:
+// Everything now targets:
 //
-//   subscription  85567e22-432e-4648-aa68-ba2714167694  ("Azure for Students")
-//   tenant        8d46a076-d093-416d-a57b-8692cde13bf8  ("Amity University")
+//   subscription  33c82ead-36a8-4d8f-b969-d8476690c224
+//   tenant        803dced7-0a24-4857-8be8-280047561e95
 //
-// That old rationale is deleted rather than left in place. A stale explanation
-// is worse than none: it reads as current and sends the next person looking for
-// resource groups that are in a subscription they cannot reach.
+// The previous rationale — two earlier subscriptions, a directory split across
+// tenants — is deleted rather than left in place. A stale explanation is worse
+// than none: it reads as current and sends the next person looking for resource
+// groups in a subscription they cannot reach.
 //
-// THE ENTRA STORY IS SPLIT ACROSS TWO TENANTS, ON PURPOSE.
-// A directory is free and does not expire when a subscription's credits do, so
-// the old tenant still exists and still owns the API's app registration.
+// WHAT IS DIFFERENT ABOUT THIS MOVE: THE TENANT CHANGED TOO.
+// The two earlier migrations kept the directory and swapped only the
+// subscription, so object ids and app registrations survived. This one does
+// not. A tenant move invalidates every directory-scoped identifier:
 //
-//   The API's Entra ID auth scheme  -> stays in the OLD tenant f774bb68-…
-//     Token validation is an HTTPS call to an authority URL. It has no
-//     relationship to which tenant owns the subscription the container runs in,
-//     so azureAdClientId / azureAdTenantId / azureAdAudience in main.bicep are
-//     unchanged. This also avoids needing app-registration rights in a
-//     university tenant, which are commonly withheld from non-admins.
+//   * the operator's object id and UPN          (SQL administrator)
+//   * the SQL administrator group's object id   (prod)
+//   * both API app registrations and the SPA    (azureAdClientId / Audience)
+//   * the GitHub OIDC application               (federated credential)
 //
-//   The SQL administrator            -> MUST be Amity 8d46a076-…
-//     An Azure SQL server only accepts an Entra administrator from the tenant
-//     its subscription trusts. The #EXT# gmail identity Day 23 used does not
-//     exist in this directory. See sqlEntraAdminObjectId below.
+// None of them can be carried across, and none of them is left at its old
+// value, because a stale client id does not fail — it deploys and silently
+// authenticates nothing. Every one is a SETME sentinel below, and the scripts
+// under migration/ fill them:
 //
-// Do not delete the old tenant or app registration when decommissioning the old
-// subscription. Deleting the directory breaks Entra authentication here.
+//   SETME01…  migration/01-set-identities.ps1     (who administers SQL)
+//   SETME02…  Day25/scripts/02-entra-app-registrations.ps1 (app registrations)
+//   SETME10…  migration/10-refresh-derived-names.ps1 (names, after dev deploys)
+//
+// AND THE RESOURCE NAMES CHANGE. main.bicep derives them from
+// uniqueString(subscription().id, environmentName, location), so a new
+// subscription yields a new token for the registry, the SQL server, the Service
+// Bus namespace, the Log Analytics workspace and the Container Apps
+// environment. Anything that hardcoded the old token now reads SETME10.
+//
+// migration/README.md is the order these must run in. migration/90-verify-no-old-ids.ps1
+// refuses to pass while any old identifier or any SETME sentinel remains.
 
 using './main.bicep'
 
@@ -77,6 +84,14 @@ param apiContainerAppName = 'quotes-api-dev'
 // straight after. This is stated rather than automated because a wrong value in
 // either direction is recoverable in one redeploy, and a clever expression here
 // would be one more thing to be wrong.
+//
+// 2026-09-25, THE MIGRATION: THIS *IS* "THE VERY FIRST DEPLOYMENT" AGAIN.
+// The new subscription has no quotes-api-dev and no quotes-web-dev, so both
+// flags are false. They were left at true because the last thing that happened
+// in the OLD subscription was a live app -- which is exactly how a correct
+// value becomes a wrong one without anybody editing it.
+// migration/10-refresh-derived-names.ps1 sets them back to true once it has
+// read both apps out of Azure.
 param quotesApiExists = true
 
 // REPLACE BEFORE DEPLOYING — and note that this line was briefly set to
@@ -131,40 +146,45 @@ param keyVaultPurgeProtection = false
 param keyVaultSoftDeleteRetentionInDays = 7
 
 // --- Entra ID ------------------------------------------------------------
-// Registered in the Amity tenant on Day 25 by
-// Day25/scripts/02-entra-app-registrations.ps1, which also wrote the three
-// values below. Before that they named tenant f774bb68-… and app 91566dbd-…,
-// in the OLD subscription's directory — which worked, because validating a
-// token is an HTTPS call to an authority URL and has nothing to do with which
-// tenant owns the subscription, and that is exactly why it survived a
-// subscription migration unnoticed.
+// THE REGISTRATION DOES NOT SURVIVE THE TENANT MOVE, SO IT IS NOT REUSED.
+// The old app registration lives in a directory this subscription no longer
+// trusts. A client id from another tenant is not an error the platform
+// reports: the deployment succeeds, the container app starts, and every
+// genuine Entra token is rejected on issuer or audience — which reads as a
+// broken auth scheme rather than as a stale identifier. So the client id and
+// the audience below are sentinels, not values.
 //
-// AND THE AUDIENCE WAS WRONG THE WHOLE TIME. This file used to call it an open
-// question: appsettings.json declares 'api://quotes-api/access' while the old
-// app used the app-ID-URI form, and they cannot both be right. They are not.
-// Entra issues an access token whose `aud` claim is the RESOURCE'S APPLICATION
-// ID URI — api://<appId> — and carries the scope separately in `scp`. The old
-// value was a scope, so the EntraId scheme would have rejected every genuine
-// Entra token handed to it.
+// Fill them by running, in the NEW tenant:
+//   ./Day25/scripts/02-entra-app-registrations.ps1 -Environment dev
+// It creates the API and SPA registrations, is idempotent, and writes the
+// three lines below itself rather than asking anyone to transcribe a GUID.
 //
-// Nothing caught it because nothing had sent one: the SPA signs in against the
-// app's own CustomJwt endpoints, so the second scheme has never been exercised
-// in anger. A dead code path is not a correct one.
+// THE AUDIENCE IS api://<appId>, NOT A SCOPE — a bug Day 25 found and the
+// reason that script exists. Entra issues an access token whose `aud` claim is
+// the RESOURCE'S Application ID URI and carries the scope separately in `scp`.
+// The value 'api://quotes-api/access' that appsettings.json once declared is a
+// scope, so the EntraId scheme would have rejected every genuine token handed
+// to it. Nothing caught it because nothing had sent one: the SPA signs in
+// against the app's own CustomJwt endpoints. A dead code path is not a
+// correct one.
 //
 // These are directory identifiers, not secrets. A tenant id and a client id
 // identify an application publicly; neither registration has a client secret,
 // and neither needs one — the SPA is a public client using PKCE and the API
-// only ever validates tokens. The companion SPA registration is
-// e2255607-dc83-4747-9623-b73cc24ff62c, unused until the front end moves to
-// MSAL.
-param azureAdTenantId = '8d46a076-d093-416d-a57b-8692cde13bf8'
-param azureAdClientId = '18920fc7-79a5-42f0-bf65-c101749dd79b'
+// only ever validates tokens.
 
 // api://<appId>, the Application ID URI -- NOT the scope. Entra puts the
 // resource's app ID URI in the token's aud claim and carries the scope
 // separately in scp, so the previous value ('api://quotes-api/access') would
 // have failed audience validation on every genuine token.
-param azureAdAudience = 'api://18920fc7-79a5-42f0-bf65-c101749dd79b'
+param azureAdTenantId = '803dced7-0a24-4857-8be8-280047561e95'
+param azureAdClientId = '23ac957e-d95a-4026-befd-18b375eb3986'
+
+// api://<appId>, the Application ID URI -- NOT the scope. Entra puts the
+// resource's app ID URI in the token's aud claim and carries the scope
+// separately in scp, so the previous value ('api://quotes-api/access') would
+// have failed audience validation on every genuine token.
+param azureAdAudience = 'api://23ac957e-d95a-4026-befd-18b375eb3986'
 
 // --- Alerting (Day 26) ----------------------------------------------------
 // A real address, because an alert nobody receives is not an alert. It is
@@ -214,18 +234,30 @@ param apiConcurrentRequests = 50
 // storage-only while asleep. The first request after a pause pays a resume
 // delay of roughly a minute.
 //
-// REPLACE BOTH BEFORE DEPLOYING — gate G5. From, while signed in to Amity:
-//   az ad signed-in-user show --query "{id:id, upn:userPrincipalName}" -o json
+// BOTH ARE SENTINELS AND THE DEPLOYMENT MUST NOT RUN UNTIL THEY ARE FILLED.
+// A tenant move invalidates an object id completely — the account that
+// administered this server in the old directory does not exist in the new one.
 //
-// With azureADOnlyAuthentication there is no SQL login to fall back on, so a
-// wrong object ID here does not fail the deployment — it succeeds and leaves a
-// server NOBODY CAN ADMINISTER, and the only fix is to redeploy the server.
-// Placeholders that fail are better than plausible values that succeed.
-// From `az ad signed-in-user show` in the Amity tenant. Note the UPN is an
-// ordinary member identity (@s.amity.edu), not the #EXT# guest form Day 23
-// used — that one belongs to the old tenant and does not exist here.
-param sqlEntraAdminObjectId = 'a59d00a8-a829-49b4-83d1-952727eea166'
-param sqlEntraAdminLogin = 'vaishalee.singh@s.amity.edu'
+// Fill them by running, signed in to the new tenant:
+//   ./migration/01-set-identities.ps1
+// which reads `az ad signed-in-user show` and writes both lines here, rather
+// than asking anyone to copy a GUID between a terminal and an editor.
+//
+// WHY A SENTINEL AND NOT THE OLD VALUE. With azureADOnlyAuthentication there is
+// no SQL login to fall back on, so a wrong-but-well-formed object id does not
+// fail the deployment — it succeeds and leaves a server NOBODY CAN ADMINISTER,
+// and the only fix is to redeploy the server. A value that is not a GUID at all
+// is rejected at deployment time, by name. Placeholders that fail are better
+// than plausible values that succeed.
+// The human who seeds the JWT signing key into the vault. keyvault.bicep grants
+// this principal Key Vault Secrets Officer ON THIS VAULT ONLY, because the vault
+// is recreated by every failed deployment and a hand-granted assignment dies with
+// it. Prod has always set this; dev never did, so dev's vault arrived unusable on
+// a fresh subscription and Day25/scripts/01-seed-jwt-secret.ps1 got a flat 403.
+param keyVaultWriterPrincipalId = '6294a008-f2fa-4b34-b06d-f897e5844511'
+
+param sqlEntraAdminObjectId = '6294a008-f2fa-4b34-b06d-f897e5844511'
+param sqlEntraAdminLogin = 'Vaishalee Singh'
 param sqlEntraAdminPrincipalType = 'User'
 
 param sqlDatabaseName = 'quotes'
@@ -294,6 +326,14 @@ param webContainerAppName = 'quotes-web-dev'
 // overwriting it. Left at false, every infrastructure-only stack update would
 // revert the front end to the aci-helloworld placeholder -- the other half of
 // the same trap, and the half the API actually fell into.
+//
+// 2026-09-25, THE MIGRATION: THIS *IS* "THE VERY FIRST DEPLOYMENT" AGAIN.
+// The new subscription has no quotes-api-dev and no quotes-web-dev, so both
+// flags are false. They were left at true because the last thing that happened
+// in the OLD subscription was a live app -- which is exactly how a correct
+// value becomes a wrong one without anybody editing it.
+// migration/10-refresh-derived-names.ps1 sets them back to true once it has
+// read both apps out of Azure.
 param webAppExists = true
 param webMinReplicas = 0
 param webMaxReplicas = 2

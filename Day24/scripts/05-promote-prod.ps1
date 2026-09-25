@@ -50,8 +50,8 @@
 
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [string] $SubscriptionId   = '85567e22-432e-4648-aa68-ba2714167694',
-    [string] $ExpectedTenant   = '8d46a076-d093-416d-a57b-8692cde13bf8',
+    [string] $SubscriptionId   = '33c82ead-36a8-4d8f-b969-d8476690c224',
+    [string] $ExpectedTenant   = '803dced7-0a24-4857-8be8-280047561e95',
 
     [string] $StackName        = 'quotes-prod',
 
@@ -73,7 +73,7 @@ param(
 
     # Where the tested images live.
     [string] $DevResourceGroup = 'thinkschool-dev-rg',
-    [string] $DevRegistry      = 'cr7mo4cimyk4vnk',
+    [string] $DevRegistry      = 'crflpj3o7i5sjfy',
 
     # ONE TAG PER APP, NOT ONE TAG PER RELEASE, and the first run of this
     # script is what proved the difference.

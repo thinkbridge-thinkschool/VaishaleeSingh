@@ -15,14 +15,28 @@ about which folder is current.
 
 ## Deployed environments
 
+**Migrating, as of 2026-09-25.** Everything is being re-created on a new
+subscription and a new tenant:
+
+```
+subscription  33c82ead-36a8-4d8f-b969-d8476690c224
+tenant        803dced7-0a24-4857-8be8-280047561e95
+```
+
+The URLs below are derived from the Container Apps environment's default domain,
+which is assigned when that environment is created — so they are not known until
+dev deploys. `migration/10-refresh-derived-names.ps1` writes the real ones into
+this table; until it has run they read `proudbeach-00851671` and nothing here is
+live. `migration/README.md` is the order to bring it back up.
+
 Two environments on one Azure subscription, deployed as separate Azure
 Deployment Stacks (`quotes-dev`, `quotes-prod`) from the same template with
 different parameter files.
 
 | | API | Web |
 |---|---|---|
-| **dev** | [quotes-api-dev](https://quotes-api-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io/health) | [quotes-web-dev](https://quotes-web-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io) |
-| **prod** | [quotes-api-prod](https://quotes-api-prod.greenhill-88fb93d9.uaenorth.azurecontainerapps.io/health) | [quotes-web-prod](https://quotes-web-prod.greenhill-88fb93d9.uaenorth.azurecontainerapps.io/quotes) |
+| **dev** | [quotes-api-dev](https://quotes-api-dev.proudbeach-00851671.uaenorth.azurecontainerapps.io/health) | [quotes-web-dev](https://quotes-web-dev.proudbeach-00851671.uaenorth.azurecontainerapps.io) |
+| **prod** | [quotes-api-prod](https://quotes-api-prod.proudbeach-00851671.uaenorth.azurecontainerapps.io/health) | [quotes-web-prod](https://quotes-web-prod.proudbeach-00851671.uaenorth.azurecontainerapps.io/quotes) |
 
 The API links point at `/health`, which is the one endpoint worth clicking: a
 200 there means the app booted (so its Key Vault reference resolved — the JWT

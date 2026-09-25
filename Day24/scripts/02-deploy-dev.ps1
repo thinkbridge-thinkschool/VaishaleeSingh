@@ -2,7 +2,7 @@
 .SYNOPSIS
     Day 24. Deploys the whole dev environment -- resource group, database,
     Service Bus, registry, identity, the API and the Angular front end -- into
-    subscription 85567e22-432e-4648-aa68-ba2714167694 as a deployment stack.
+    subscription 33c82ead-36a8-4d8f-b969-d8476690c224 as a deployment stack.
 
 .DESCRIPTION
     One script instead of fifteen commands, because two of those commands cannot
@@ -40,18 +40,55 @@ param(
     [switch] $PlanOnly,
     [switch] $SkipFrontEnd,
 
-    [string] $SubscriptionId  = '85567e22-432e-4648-aa68-ba2714167694',
+    # DENY SETTINGS ARE A TENANT-LEVEL FEATURE, AND A NEW TENANT MAY NOT HAVE IT
+    # YET. A stack with denyDelete creates a DENY ASSIGNMENT, which requires the
+    # Deployment Stacks service to be registered in the tenant. On a directory
+    # created minutes ago that registration is asynchronous, and until it lands
+    # every stack call fails with:
+    #
+    #   DeploymentStackTenantRegistrationFailed -- The service encountered an
+    #   internal error while performing registration. Please try again later, or
+    #   temporarily set denySettings to 'none' and re-create the deployment stack.
+    #
+    # The error names the workaround, so this exposes it as a parameter rather
+    # than making somebody edit two call sites under time pressure.
+    #
+    # WHAT 'none' COSTS, EXACTLY: the deny assignment is what stops a person
+    # deleting a stack-managed resource out of band, from the portal. It is NOT
+    # what makes teardown work -- actionOnUnmanage deleteAll is, and that is
+    # unaffected. So 'none' weakens protection against a human, not the
+    # cleanup guarantee Day 24 exists to prove. Move back to denyDelete with
+    # a stack update once the tenant registration completes.
+    [ValidateSet('denyDelete', 'denyWriteAndDelete', 'none')]
+    [string] $DenySettingsMode = 'denyDelete',
+
+    [string] $SubscriptionId  = '33c82ead-36a8-4d8f-b969-d8476690c224',
     [string] $StackName       = 'quotes-dev',
     [string] $Location        = 'uaenorth',
     [string] $ResourceGroup   = 'thinkschool-dev-rg',
     [string] $ContainerApp    = 'quotes-api-dev',
     [string] $AzdEnvName      = 'thinkschool-dev',
-    [string] $SqlAdminObjectId = 'a59d00a8-a829-49b4-83d1-952727eea166',
-    [string] $SqlAdminLogin    = 'vaishalee.singh@s.amity.edu'
+    [string] $SqlAdminObjectId = '6294a008-f2fa-4b34-b06d-f897e5844511',
+    [string] $SqlAdminLogin    = 'Vaishalee Singh'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+# Native az output on STDERR becomes a terminating ErrorRecord under
+# $ErrorActionPreference = 'Stop' in Windows PowerShell 5.1, so a harmless
+# extension notice can kill a step. Calls that only READ go through here.
+# The argument list is an array so PowerShell does not try to bind '-o'.
+function Invoke-Az {
+    param([Parameter(Mandatory)] [string[]] $AzArgs)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & az @AzArgs --only-show-errors 2>&1 |
+               Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }
+        return (($out | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine)
+    } finally { $ErrorActionPreference = $previous }
+}
 
 # Anchored to this script's own location so it does not matter where you run it
 # from. Day 24 lost time to `dotnet test Day7/piece2/...` executed from inside
@@ -141,7 +178,7 @@ try {
     Invoke-Checked 'stack validate' {
         az stack sub validate --name $StackName --location $Location `
             --template-file infra/main.bicep --parameters infra/main.dev.bicepparam `
-            --action-on-unmanage deleteAll --deny-settings-mode denyDelete `
+            --action-on-unmanage deleteAll --deny-settings-mode $DenySettingsMode `
             --only-show-errors -o none
     }
     Ok 'Stack validates.'
@@ -204,13 +241,23 @@ try {
     # DenyAssignmentAuthorizationFailed while an orphan rule accumulates. See
     # the long comment in azure.yaml.
     Invoke-Checked 'stack create' {
-        az stack sub create --name $StackName --location $Location `
-            --template-file infra/main.bicep --parameters infra/main.dev.bicepparam `
-            --action-on-unmanage deleteAll --deny-settings-mode denyDelete `
-            --deny-settings-apply-to-child-scopes `
-            --deny-settings-excluded-actions `
-                'Microsoft.Resources/subscriptions/resourceGroups/delete Microsoft.Sql/servers/firewallRules/delete' `
-            --description 'QuotesApi dev - Day 24' --yes -o none
+        if ($DenySettingsMode -eq 'none') {
+            # The excluded-actions and child-scopes flags describe a deny
+            # assignment. With mode 'none' there is no deny assignment to
+            # describe, and az rejects them rather than ignoring them.
+            az stack sub create --name $StackName --location $Location `
+                --template-file infra/main.bicep --parameters infra/main.dev.bicepparam `
+                --action-on-unmanage deleteAll --deny-settings-mode none `
+                --description 'QuotesApi dev - Day 24' --yes -o none
+        } else {
+            az stack sub create --name $StackName --location $Location `
+                --template-file infra/main.bicep --parameters infra/main.dev.bicepparam `
+                --action-on-unmanage deleteAll --deny-settings-mode $DenySettingsMode `
+                --deny-settings-apply-to-child-scopes `
+                --deny-settings-excluded-actions `
+                    'Microsoft.Resources/subscriptions/resourceGroups/delete Microsoft.Sql/servers/firewallRules/delete' `
+                --description 'QuotesApi dev - Day 24' --yes -o none
+        }
     }
     Ok 'Stack created.'
 
@@ -251,8 +298,16 @@ try {
     # Runs as the signed-in account, which must be the one named in
     # sqlEntraAdminLogin. Anyone else gets a permission error, and that is the
     # Entra-only design working rather than a fault.
-    if ($acct.user.name -ne $SqlAdminLogin) {
-        Note "Signed in as $($acct.user.name) but the SQL admin is $SqlAdminLogin."
+    # COMPARED BY OBJECT ID, NOT BY NAME. This used to compare the signed-in
+    # account's name against $SqlAdminLogin, which worked only while the login
+    # happened to be a UPN. The login is a DISPLAY NAME -- that is what
+    # `az sql server ad-admin create --display-name` means -- so the old
+    # comparison now mismatches on every run and prints a warning that is simply
+    # wrong. A check that cries wolf every time is worse than no check: it is
+    # the one people learn to scroll past.
+    $signedInId = (Invoke-Az @('ad','signed-in-user','show','--query','id','-o','tsv')).Trim()
+    if (-not [string]::IsNullOrWhiteSpace($signedInId) -and $signedInId -ne $SqlAdminObjectId) {
+        Note "Signed in as object $signedInId but the SQL admin is $SqlAdminObjectId ($SqlAdminLogin)."
         Note 'This step will fail with a permission error unless they match.'
     }
     Invoke-Checked 'create-sql-user.ps1' {
@@ -401,7 +456,14 @@ try {
     $imageTag = "dev-$(Get-Date -Format 'yyyyMMddHHmmss')"
     $acrName  = $acrEndpoint.Split('.')[0]
 
-    $tokenJson = az acr login --name $acrName --expose-token -o json 2>$null | ConvertFrom-Json
+    # --expose-token prints an advisory WARNING to stderr saying the token is a
+    # REFRESH token, not an access token. 2>$null does NOT protect against it: in
+    # Windows PowerShell 5.1 a native command that writes to stderr raises a
+    # terminating NativeCommandError under $ErrorActionPreference = 'Stop' whether
+    # the stream is redirected or not -- the same class of bug as gate G5 and the
+    # azd update banner. Invoke-Az drops the ErrorRecords and returns stdout, which
+    # is the JSON this line actually wants.
+    $tokenJson = (Invoke-Az @('acr','login','--name',$acrName,'--expose-token','-o','json')) | ConvertFrom-Json
     if (-not $tokenJson.accessToken) { Die "Could not get an ACR token for $acrName." }
     $env:SDK_CONTAINER_REGISTRY_UNAME = '00000000-0000-0000-0000-000000000000'
     $env:SDK_CONTAINER_REGISTRY_PWORD = $tokenJson.accessToken

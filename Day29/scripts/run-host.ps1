@@ -36,7 +36,7 @@ param(
     # committed file is a password in every clone of the repository.
     [string] $SqlPassword = $env:CAPSTONE_SQL_PASSWORD,
 
-    [string] $ServiceBusNamespace = 'sb-quotes-7mo4cimyk4vnk.servicebus.windows.net',
+    [string] $ServiceBusNamespace = 'sb-quotes-flpj3o7i5sjfy.servicebus.windows.net',
     [int]    $Port = 5080,
 
     # Raise to Debug when you need EF Core's per-command output back.

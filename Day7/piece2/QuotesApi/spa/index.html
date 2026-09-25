@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en" data-beasties-container>
+  <head>
+    <meta charset="utf-8">
+    <title>Quotes</title>
+    <base href="/">
+
+    <!-- viewport-fit=cover so the layout can use the full screen on a notched phone. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+
+    <!--
+      Tells the browser the page supports both themes BEFORE any CSS or script
+      runs, so form controls, scrollbars and the flash of background during load
+      match the theme instead of being light for a frame. The app's own choice
+      (light / dark / follow the system) is applied by ThemeStore via a data-theme
+      attribute on <html>.
+    -->
+    <meta name="color-scheme" content="light dark">
+
+    <!--
+      Lighthouse's SEO category checks for a meta description and scores the
+      whole category down without one. It is also the text a link preview uses,
+      which is the reason that check exists.
+    -->
+    <meta name="description" content="Browse, write and collect quotes. A signals-based Angular client for the Quotes API.">
+
+    <!--
+      The hero on /quotes is the LCP element, and it is a CSS background-image --
+      which the preload scanner cannot see, so the browser only discovers it after
+      the stylesheet has parsed. Declaring it here moves the request into the very
+      first round trip and is worth ~0.6 s of LCP on the throttled mobile profile.
+
+      fetchpriority="high" because a preloaded image otherwise queues at Low, behind
+      the twelve card backgrounds this page also requests.
+    -->
+    <link rel="preload" as="image" href="/quotes-hero-bg.webp" type="image/webp" fetchpriority="high">
+
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <style>:root{color-scheme:light;--color-primary:#0c7d7b;--color-primary-hover:#096463;--color-primary-active:#075352;--color-primary-soft:#e3f2f1;--color-primary-ring:#0c7d7b;--color-on-primary:#ffffff;--color-background:#fbf7ef;--color-background-sunken:#f4eee2;--color-surface:#ffffff;--color-surface-hover:#fdfbf7;--color-text:#1d2a2a;--color-text-muted:#5c6b6b;--color-border:#e6dfd1;--color-border-strong:#d3c9b5;--color-success:#14804a;--color-success-soft:#e4f2ea;--color-danger:#a52a21;--color-danger-hover:#8a221b;--color-danger-soft:#fbeae8;--color-warning:#96591a;--color-warning-soft:#fbf0e2;--shadow-sm:0 1px 2px rgba(29, 42, 42, .06);--shadow-md:0 4px 14px rgba(29, 42, 42, .08);--shadow-lg:0 18px 44px rgba(29, 42, 42, .16);--color-overlay:rgba(29, 42, 42, .38);--radius-sm:8px;--radius-md:12px;--radius-lg:18px;--radius-pill:999px;--space-1:.25rem;--space-2:.5rem;--space-3:.75rem;--space-4:1rem;--space-5:1.5rem;--space-6:2rem;--space-7:3rem;--space-8:4rem;--font-sans:"Avenir Next LT Pro", "Avenir Next", "Mulish", "Segoe UI", system-ui, -apple-system, sans-serif;--text-xs:.75rem;--text-sm:.875rem;--text-base:1rem;--text-lg:1.125rem;--text-xl:clamp(1.25rem, 1.1rem + .6vw, 1.5rem);--text-2xl:clamp(1.5rem, 1.25rem + 1.1vw, 2rem);--text-3xl:clamp(1.875rem, 1.5rem + 1.7vw, 2.5rem);--leading-tight:1.2;--leading-normal:1.55;--weight-regular:400;--weight-medium:500;--weight-semibold:600;--weight-bold:700;--duration-fast:.12s;--duration-base:.22s;--ease-out:cubic-bezier(.2, 0, .2, 1);--layout-max-width:76rem;--header-height:4rem;--z-modal:100}*,*:before,*:after{box-sizing:border-box}html{overflow-x:hidden;-webkit-text-size-adjust:100%}body{margin:0;min-height:100dvh;background:var(--color-background);color:var(--color-text);font-family:var(--font-sans);font-size:var(--text-base);line-height:var(--leading-normal);-webkit-font-smoothing:antialiased}@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:1ms!important;animation-iteration-count:1!important;transition-duration:1ms!important;scroll-behavior:auto!important}}</style><link rel="stylesheet" href="styles-QQTOR4YB.css" media="print" onload="this.media='all'"><noscript><link rel="stylesheet" href="styles-QQTOR4YB.css"></noscript></head>
+  <body>
+    <app-root></app-root>
+  <link rel="modulepreload" href="chunk-VTYCHWK2.js"><link rel="modulepreload" href="chunk-4KFCTKJZ.js"><link rel="modulepreload" href="chunk-VUUIERUJ.js"><link rel="modulepreload" href="chunk-TBUIKSCQ.js"><script src="main-SSEN3OTN.js" type="module"></script></body>
+</html>

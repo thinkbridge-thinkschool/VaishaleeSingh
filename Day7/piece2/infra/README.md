@@ -26,22 +26,37 @@ modules/
 ## Which subscription this targets
 
 ```
-subscription  85567e22-432e-4648-aa68-ba2714167694   "Azure for Students"
-tenant        8d46a076-d093-416d-a57b-8692cde13bf8   "Amity University"
+subscription  33c82ead-36a8-4d8f-b969-d8476690c224
+tenant        803dced7-0a24-4857-8be8-280047561e95
 ```
 
-The previous subscription (`80d20ef9-…`, tenant `f774bb68-…`) is out of credit.
 Nothing was moved; everything here is re-created from this template.
 
-**The Entra story spans two tenants on purpose.** A directory is free and does
-not expire with a subscription's credits, so the API's Entra ID authentication
-scheme still points at the *old* tenant and its app registration
-`91566dbd-…` — token validation is an HTTPS call to an authority URL and has no
-relationship to which tenant owns the subscription. What must live in the Amity
-tenant is the SQL administrator (a server only accepts an admin from the tenant
-its subscription trusts), the managed identity, and the GitHub OIDC principal.
+**This migration changed the tenant as well as the subscription, and that is
+the part with teeth.** The two earlier moves kept the directory, so object ids
+and app registrations survived them. This one invalidates every
+directory-scoped identifier: the operator's object id and UPN, the SQL
+administrator group, both API app registrations, the SPA registration, and the
+GitHub OIDC application. None of them is left at its old value — a stale client
+id does not fail, it deploys and authenticates nothing.
 
-Do not delete the old tenant when decommissioning the old subscription.
+Every one of them is a `SETME` sentinel in the parameter files, filled by a
+script rather than by hand:
+
+| Sentinel | Filled by |
+|---|---|
+| `SETME01…` | `migration/01-set-identities.ps1` |
+| `SETME02…` | `Day25/scripts/02-entra-app-registrations.ps1` |
+| `SETME10…` | `migration/10-refresh-derived-names.ps1`, after dev deploys |
+
+`SETME10` exists because resource names are derived from
+`uniqueString(subscription().id, environmentName, location)`. A new
+subscription means a new token, so the registry, SQL server, Service Bus
+namespace, Log Analytics workspace and Container Apps environment all get new
+names — and everything that hardcoded the old ones had to stop.
+
+`migration/README.md` is the order. `migration/90-verify-no-old-ids.ps1` fails
+while any old identifier or any sentinel remains.
 
 ## Deployment stacks
 

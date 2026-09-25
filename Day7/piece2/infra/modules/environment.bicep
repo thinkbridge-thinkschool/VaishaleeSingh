@@ -45,11 +45,31 @@ resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09
   name: logAnalyticsWorkspaceName
 }
 
-resource newEnvironment 'Microsoft.App/managedEnvironments@2023-05-01' = if (createEnvironment) {
+resource newEnvironment 'Microsoft.App/managedEnvironments@2026-07-01' = if (createEnvironment) {
   name: environmentResourceName
   location: location
   tags: tags
   properties: {
+    // An environment declared with NO workloadProfiles is provisioned by Azure
+    // as an "express" environment, which rejects secrets[].keyVaultUrl with
+    // ExpressEnvironmentFeatureNotSupported. Day 23/25 keep the JWT signing
+    // secret in Key Vault and reach it by managed-identity reference, so this
+    // deployment REQUIRES a workload-profiles environment. One Consumption
+    // profile is the documented way to ask for one; billing is unchanged.
+    // An existing express environment cannot be converted in place -- delete it.
+    // environmentMode IS THE PROPERTY THAT DECIDES THE ENVIRONMENT CLASS.
+    // Azure now defaults a newly created environment to 'Express', which rejects
+    // secrets[].keyVaultUrl. 2023-05-01 does not know this property at all, so a
+    // template pinned there silently accepts whatever default ARM applies -- which
+    // is why this broke only on the new subscription. Stating the mode makes the
+    // environment class an explicit decision instead of an inherited default.
+    environmentMode: 'WorkloadProfiles'
+    workloadProfiles: [
+      {
+        name: 'Consumption'
+        workloadProfileType: 'Consumption'
+      }
+    ]
     appLogsConfiguration: {
       destination: 'log-analytics'
       logAnalyticsConfiguration: {

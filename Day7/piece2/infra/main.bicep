@@ -125,12 +125,17 @@ param jwtAudience string = 'quotes-api'
 //
 // NO DEFAULTS, DELIBERATELY, AND THIS USED TO BE THREE DEFAULTS.
 //
-// These three carried values copied from appsettings.json: tenant
-// f774bb68-…, a client id from a registration in that tenant, and the audience
+// These three carried values copied from appsettings.json: a tenant, a client
+// id from a registration in that tenant, and the audience
 // 'api://quotes-api/access'. All three were wrong by the time Day 25 finished.
 // The registration moved to the tenant that owns the subscription, and the
 // audience was a SCOPE rather than an audience — Entra issues tokens whose aud
 // is the resource's Application ID URI, with the scope carried in scp.
+//
+// The 2026-09 tenant migration made the point again and more sharply: an app
+// registration is tenant-scoped, so moving directories invalidates it outright.
+// A required parameter is what turns that from a silent runtime failure into a
+// deployment that stops and names what is missing.
 //
 // main.dev.bicepparam was corrected. main.prod.bicepparam overrode none of
 // them, so prod would have deployed CLEANLY and authenticated nothing: the

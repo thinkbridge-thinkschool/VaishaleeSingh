@@ -45,13 +45,13 @@
 
 [CmdletBinding()]
 param(
-    [string] $SubscriptionId = '85567e22-432e-4648-aa68-ba2714167694',
+    [string] $SubscriptionId = '33c82ead-36a8-4d8f-b969-d8476690c224',
     [string] $StackName      = 'quotes-dev',
     [string] $Location       = 'uaenorth',
     [string] $ResourceGroup  = 'thinkschool-dev-rg',
     [string] $ContainerApp   = 'quotes-api-dev',
-    [string] $SqlServer      = 'sql-quotes-7mo4cimyk4vnk',
-    [string] $AcrEndpoint    = 'cr7mo4cimyk4vnk.azurecr.io',
+    [string] $SqlServer      = 'sql-quotes-flpj3o7i5sjfy',
+    [string] $AcrEndpoint    = 'crflpj3o7i5sjfy.azurecr.io',
     [string] $ImageTag       = 'dev-20260908171206'
 )
 
@@ -232,7 +232,7 @@ foreach ($i in 1..30) {
         # The console log is the only place the cause appears, and a crashed
         # replica is gone by the time you look -- so read it from Log Analytics.
         Note 'Read the crash output with:'
-        Note "  `$ws = az monitor log-analytics workspace show -g $ResourceGroup -n log7mo4cimyk4vnk --query customerId -o tsv"
+        Note "  `$ws = az monitor log-analytics workspace show -g $ResourceGroup -n logflpj3o7i5sjfy --query customerId -o tsv"
         Note "  az monitor log-analytics query --workspace `$ws --analytics-query `"ContainerAppConsoleLogs_CL | where RevisionName_s == '$($rev.name)' | project TimeGenerated, Log_s | order by TimeGenerated asc | take 60`" -o table"
         $failures += "revision $state"
         break
