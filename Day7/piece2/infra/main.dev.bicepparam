@@ -177,6 +177,11 @@ param keyVaultSoftDeleteRetentionInDays = 7
 // resource's app ID URI in the token's aud claim and carries the scope
 // separately in scp, so the previous value ('api://quotes-api/access') would
 // have failed audience validation on every genuine token.
+
+// api://<appId>, the Application ID URI -- NOT the scope. Entra puts the
+// resource's app ID URI in the token's aud claim and carries the scope
+// separately in scp, so the previous value ('api://quotes-api/access') would
+// have failed audience validation on every genuine token.
 param azureAdTenantId = '803dced7-0a24-4857-8be8-280047561e95'
 param azureAdClientId = '23ac957e-d95a-4026-befd-18b375eb3986'
 

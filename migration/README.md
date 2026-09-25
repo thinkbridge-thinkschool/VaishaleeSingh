@@ -160,20 +160,75 @@ domain exists.
 ```
 
 This is the first thing that creates anything. It deploys the `quotes-dev`
-stack with `--action-on-unmanage deleteAll`, which is also what makes step 10
+stack with `--action-on-unmanage deleteAll`, which is also what makes step 13
 short.
 
-Note `SERVICE_QUOTES_API_RESOURCE_EXISTS` is `false` in the azd environment,
-which is correct for a subscription where the container app does not exist yet.
-**Set it to `true` after this first successful deploy** — with it false, a later
-deployment overwrites the running image with the placeholder instead of reading
-back what is deployed. That default cost a deployed image once already.
+**Four things about a first deployment into a fresh subscription. None is
+obvious from the templates, and every one of them cost a run.**
+
+**(a) The `exists` flags must be `false` first, then `true`.**
+`quotesApiExists` and `webAppExists` in `main.dev.bicepparam` — and the matching
+`SERVICE_QUOTES_API_RESOURCE_EXISTS` in the azd environment — tell the template
+to read the image off the *running* container app instead of using the
+placeholder. Where the app does not exist yet, `true` makes `fetchLatestImage`
+resolve against nothing and the deployment fails. So: deploy with both `false`,
+and set both `true` the moment both apps run a real image. Leaving them `false`
+is the opposite failure and a quieter one — every later deploy rewrites the
+running app back to `mcr.microsoft.com/azuredocs/aci-helloworld`, whose probes
+then fail, because it serves a static page and has no `/health/live`.
+
+**(b) The Container Apps environment must state its mode.** Azure now
+provisions an environment created without `properties.environmentMode` as an
+**express** environment, and express environments reject
+`configuration.secrets[].keyVaultUrl`:
+
+```
+ExpressEnvironmentFeatureNotSupported
+'KeyVaultUrl in secrets' is not supported for container app '...'
+```
+
+Day 23/25 keep the JWT signing key in Key Vault and reach it by
+managed-identity reference, so this design *requires* a workload-profiles
+environment. `modules/environment.bicep` now pins a newer API version and states
+`environmentMode: 'WorkloadProfiles'`. An existing express environment cannot be
+converted in place; it has to be deleted and recreated. While the stack owns it,
+that delete is refused by the stack's own deny assignment, so the sequence is:
+
+```powershell
+az stack sub delete --name quotes-dev --action-on-unmanage detachAll --yes
+az containerapp env delete -n <env> -g thinkschool-dev-rg --yes
+./Day24/scripts/02-deploy-dev.ps1
+```
+
+`detachAll` removes the stack and its deny assignments and **deletes nothing**;
+the next create re-adopts every resource.
+
+Nothing was wrong with the old environment — this broke because a platform
+default moved underneath a template pinned to an older API version. That is
+worth remembering as a category, not just as an incident.
+
+**(c) The vault must hold `jwt-secret` before the container app is created.**
+The reference resolves when a revision is created, so a stack run against an
+empty vault fails with `Unable to get value using Managed identity ... for
+secret jwt-secret`. The vault itself is created by the stack, so in practice the
+first run fails, you seed (step 8's `01-seed-jwt-secret.ps1`), and you run again.
+`05-promote-prod.ps1` automates that dance for prod; the dev script does not yet.
+
+**(d) Dev's vault needs `keyVaultWriterPrincipalId`.** `keyvault.bicep` grants
+that principal Key Vault Secrets Officer **on this vault alone** — deliberately,
+because a hand-granted assignment dies with the vault on the next failed deploy.
+Prod had always set it; dev never had, so dev's fresh vault arrived unwritable
+and the seed script returned a flat 403. Both parameter files set it now. If you
+do grant the role by hand to unblock yourself, delete that assignment before the
+next deploy: it has a random name, the template's has a deterministic one, and
+Azure refuses the second with `RoleAssignmentExists` — and refuses the delete
+too, until the stack is detached, for the same deny-assignment reason as (b).
 
 ### 6. SQL user, then migrations, then the real image
 
 ```powershell
 ./Day7/piece2/scripts/create-sql-user.ps1
-./Day24/scripts/03-apply-sql-migrations.ps1
+./Day24/scripts/03-apply-sql-migrations.ps1 -SqlServerFqdn sql-quotes-<token>.database.windows.net
 ./Day24/scripts/04-finish-dev.ps1
 ```
 
@@ -181,7 +236,31 @@ back what is deployed. That default cost a deployed image once already.
 SQL server grants the identity access to the *server*; it does not create a
 user inside the *database*. ARM cannot do it — the contained user is T-SQL. Skip
 it and the app **starts and then never becomes ready**, which looks like a hang
-rather than a permissions error.
+rather than a permissions error. (`02-deploy-dev.ps1` now creates the contained
+user itself, so this is belt and braces rather than the only path.)
+
+**Migrations are part of this step, not a later tidy-up.** The API refuses to
+start against a database with no applied migrations — deliberately, and it says
+so:
+
+```
+System.InvalidOperationException: The SQL Server database has no applied
+migrations. They are applied by the deployment, not by this app
+```
+
+That exception is the best failure in this whole migration: to produce it the
+app had already resolved its Key Vault secret, authenticated to an Entra-only
+SQL server as its managed identity, and queried `__EFMigrationsHistory`. Three
+things proven by one error.
+
+One mechanical note: a revision that already failed does not retry itself, and
+neither `revision restart` nor `revision copy` will help — copy produces no new
+revision when the template is byte-identical. Force a genuinely new one:
+
+```powershell
+az containerapp update -n quotes-api-dev -g thinkschool-dev-rg `
+  --image <acr>.azurecr.io/quotes-api:<tag> --revision-suffix postmigrate1
+```
 
 `04-finish-dev.ps1` still carries `SETME10` names at this point. Pass the real
 ones on the command line, or run step 7 first and then this — either works; the
@@ -220,6 +299,38 @@ domain instead of a sentinel:
 `01-github-oidc.ps1` prints the new application's `appId`. Keep it — step 9
 needs it.
 
+**It does not register a credential for the `dev` branch, and both deploy
+workflows run on `dev`.** The script registers `main`, `pull_request`,
+`production` and `environment:production`, in both the plain and the
+organisation-id spelling of the subject. A run on `dev` presents a subject none
+of those match and fails with `AADSTS700213`, which reads like a configuration
+error anywhere but where it is. Until the script is fixed, add both spellings by
+hand:
+
+```powershell
+$app = '<appId>'
+@'
+{"name":"dev","issuer":"https://token.actions.githubusercontent.com","subject":"repo:<org>/<repo>:ref:refs/heads/dev","audiences":["api://AzureADTokenExchange"]}
+'@ | Set-Content -Path "$env:TEMP\fc-dev.json" -Encoding ascii
+az ad app federated-credential create --id $app --parameters "@$env:TEMP\fc-dev.json"
+```
+
+and again with the `<org>@<orgId>/<repo>@<repoId>` spelling. `az ad app
+federated-credential list --id $app --query "[].subject" -o tsv` should then show
+six subjects.
+
+The web front end also needs its own image built and pushed once, because it is a
+separate nginx image that no .NET publish produces and that CI builds with
+`docker build`:
+
+```powershell
+cd Day13/quotes-web
+az acr login --name <acr>
+docker build -t "<acr>.azurecr.io/quotes-web:<tag>" .
+docker push "<acr>.azurecr.io/quotes-web:<tag>"
+az containerapp update -n quotes-web-dev -g thinkschool-dev-rg --image "<acr>.azurecr.io/quotes-web:<tag>" --revision-suffix web1
+```
+
 `01-reconcile-sql-firewall.ps1` matters more here than it looks. A Consumption
 Container Apps environment does not guarantee its outbound address, and when it
 moved last time every container stopped booting **while the deployment stayed
@@ -238,6 +349,28 @@ secrets and its resource names from repository variables. Had those been
 written into the YAML, this migration would have touched five workflow files
 instead of zero.
 
+The script needs the GitHub CLI. If `winget` is not available either, a portable
+copy works and needs no administrator:
+
+```powershell
+$rel   = Invoke-RestMethod https://api.github.com/repos/cli/cli/releases/latest
+$asset = $rel.assets | Where-Object { $_.name -like '*windows_amd64.zip' } | Select-Object -First 1
+Invoke-WebRequest $asset.browser_download_url -OutFile "$env:TEMP\gh.zip"
+Expand-Archive "$env:TEMP\gh.zip" -DestinationPath "$env:USERPROFILE\gh" -Force
+$env:PATH = "$env:USERPROFILE\gh\bin;$env:PATH"
+gh auth login
+```
+
+**One workflow does have to change: `day17-swa-deploy.yml` must be disabled.**
+`Microsoft.Web/staticSites` is offered in a handful of regions worldwide and
+none of them is permitted here, which is why the front end is an nginx container
+app in the first place. Left enabled, it goes red on every push to `main`
+forever — and a check that is always red is a check nobody reads.
+
+```powershell
+gh workflow disable day17-swa-deploy.yml --repo <org>/<repo>
+```
+
 ### 10. Prod
 
 ```powershell
@@ -252,10 +385,28 @@ question "was this commit tested in dev".
 
 One permission trap, which cost a whole attempt last time: **`AcrPush` does not
 include `import`.** The source registry needs its own read permission for the
-principal doing the import.
+principal doing the import. `01-github-oidc.ps1 -ProdRegistry <name>` creates a
+custom `ACR Image Importer (quotes)` role for exactly this.
+
+**Prod's Key Vault had to be renamed.** Key Vault names are *global*, not
+per-subscription, and unlike everything else in `main.bicep` the prod vault name
+is a literal rather than a `uniqueString` derivation. The old subscription's
+`kv-quotes-prod` still holds the name, and waiting for it would make prod's
+creation depend on the teardown that is meant to happen last. So
+`main.prod.bicepparam` now says `kv-quotes-prod-v2` — the same reasoning that
+renamed the capstone registry and SQL server. A soft-deleted vault is a different
+case with a different fix (`az keyvault list-deleted`, then `az keyvault purge`);
+check which one you have before reaching for either.
+
+**Prod's `exists` flags start `false` too.** They were committed as `true`, which
+was the truth on the old subscription and a lie on this one — the preflight
+checks them against reality and says so. Set both `false` before the first prod
+create, and both `true` immediately after step 9 of that script rolls the apps
+onto the imported images.
 
 After prod exists, re-run step 9 so
-`AZURE_PROD_CONTAINER_REGISTRY_ENDPOINT` names the real prod registry.
+`AZURE_PROD_CONTAINER_REGISTRY_ENDPOINT` names the real prod registry, and
+re-run `01-github-oidc.ps1 -ProdRegistry <name>` so the pipeline can reach it.
 
 ### 11. Capstone
 
@@ -383,3 +534,11 @@ already read identity from secrets and names from variables.
 | Containers stop booting, deployment green | The Container Apps outbound address moved. Re-run `Day27/scripts/01-reconcile-sql-firewall.ps1`. |
 | Outbox rows stuck at `Pending`, no errors | Service Bus role assignment has not propagated yet. Wait a few minutes. |
 | `az acr import` fails with permissions | `AcrPush` does not include `import`. The source registry needs its own read grant. |
+| `ExpressEnvironmentFeatureNotSupported` on `keyVaultUrl` | The environment was created without `environmentMode`, so Azure made it express. Detach the stack, delete the environment, redeploy. It cannot be converted. |
+| `VaultAlreadyExists` | Key Vault names are global. Either it is soft-deleted here (`az keyvault list-deleted` → `az keyvault purge`) or it is alive on another subscription (rename). |
+| `RoleAssignmentExists` | A hand-granted assignment duplicates the template's. Delete the hand-made one — after detaching the stack, or the deny assignment refuses that too. |
+| `DenyAssignmentAuthorizationFailed` | The stack is protecting its own resource. `az stack sub delete --action-on-unmanage detachAll` removes the protection and keeps everything. |
+| App starts, then dies on `InvalidOperationException` about migrations | Migrations have not been applied to that database. The app refuses to self-migrate by design. |
+| Revision stuck `ActivationFailed` after the cause was fixed | A failed revision does not retry, and `revision copy` creates nothing when the template is unchanged. Force one with `--revision-suffix`. |
+| `NativeCommandError` against a PowerShell line, naming no az problem | Windows PowerShell 5.1 turns native-command stderr into a terminating error under `$ErrorActionPreference = 'Stop'`, and `2>$null` does not prevent it. Route the call through the `Invoke-Az` helper. |
+| Workflow on `dev` fails `AADSTS700213` | No federated credential registers the `dev` subject. Add both spellings; do not widen the existing ones. |
