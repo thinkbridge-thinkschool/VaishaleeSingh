@@ -15,14 +15,36 @@ about which folder is current.
 
 ## Deployed environments
 
+**Re-created on a new subscription and a new tenant on 2026-09-25**, and live
+there since:
+
+```
+subscription  33c82ead-36a8-4d8f-b969-d8476690c224
+tenant        803dced7-0a24-4857-8be8-280047561e95
+```
+
+Nothing was moved — Azure has no operation that carries these resources, let
+alone their identities, across a tenant. Everything below was re-created from
+the templates in this repository. `migration/README.md` is the order it was done
+in, and what went wrong at each step.
+
+The URLs are derived from the Container Apps environment's default domain, which
+is assigned when that environment is created and cannot be known before it
+exists; `migration/10-refresh-derived-names.ps1` reads them back from Azure and
+writes them here.
+
 Two environments on one Azure subscription, deployed as separate Azure
 Deployment Stacks (`quotes-dev`, `quotes-prod`) from the same template with
 different parameter files.
 
 | | API | Web |
 |---|---|---|
-| **dev** | [quotes-api-dev](https://quotes-api-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io/health) | [quotes-web-dev](https://quotes-web-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io) |
-| **prod** | [quotes-api-prod](https://quotes-api-prod.greenhill-88fb93d9.uaenorth.azurecontainerapps.io/health) | [quotes-web-prod](https://quotes-web-prod.greenhill-88fb93d9.uaenorth.azurecontainerapps.io/quotes) |
+| **dev** | [quotes-api-dev](https://quotes-api-dev.proudbeach-00851671.uaenorth.azurecontainerapps.io/health) | [quotes-web-dev](https://quotes-web-dev.proudbeach-00851671.uaenorth.azurecontainerapps.io) |
+| **prod** | [quotes-api-prod](https://quotes-api-prod.proudbeach-00851671.uaenorth.azurecontainerapps.io/health) | [quotes-web-prod](https://quotes-web-prod.proudbeach-00851671.uaenorth.azurecontainerapps.io/quotes) |
+
+The Day 32 capstone runs beside them, deliberately separate — its own SQL server,
+registry and Entra registrations, and its own deployment path:
+[ca-quotes-capstone](https://ca-quotes-capstone.proudbeach-00851671.uaenorth.azurecontainerapps.io/health).
 
 The API links point at `/health`, which is the one endpoint worth clicking: a
 200 there means the app booted (so its Key Vault reference resolved — the JWT

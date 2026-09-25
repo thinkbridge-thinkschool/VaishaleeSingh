@@ -49,8 +49,8 @@
 
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [string] $SubscriptionId = '85567e22-432e-4648-aa68-ba2714167694',
-    [string] $ExpectedTenantId = '8d46a076-d093-416d-a57b-8692cde13bf8',
+    [string] $SubscriptionId = '33c82ead-36a8-4d8f-b969-d8476690c224',
+    [string] $ExpectedTenantId = '803dced7-0a24-4857-8be8-280047561e95',
 
     # WHICH ENVIRONMENT, AND WHY PROD GETS ITS OWN REGISTRATION.
     #
@@ -81,7 +81,7 @@ Set-StrictMode -Version Latest
 if ([string]::IsNullOrWhiteSpace($ApiDisplayName)) { $ApiDisplayName = "QuotesApi ($Environment)" }
 if ([string]::IsNullOrWhiteSpace($SpaDisplayName)) { $SpaDisplayName = "quotes-web ($Environment)" }
 if ([string]::IsNullOrWhiteSpace($WebUrl) -and $Environment -eq 'dev') {
-    $WebUrl = 'https://quotes-web-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io'
+    $WebUrl = 'https://quotes-web-dev.proudbeach-00851671.uaenorth.azurecontainerapps.io'
 }
 $ParamFileName = "main.$Environment.bicepparam"
 

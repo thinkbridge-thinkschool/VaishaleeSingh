@@ -31,7 +31,7 @@
 
 [CmdletBinding()]
 param(
-    [string] $SubscriptionId = '85567e22-432e-4648-aa68-ba2714167694',
+    [string] $SubscriptionId = '33c82ead-36a8-4d8f-b969-d8476690c224',
 
     # Override if the policy is reassigned. Empty means "read it from the
     # policy assignment", which is the point.

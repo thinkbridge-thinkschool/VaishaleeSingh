@@ -195,7 +195,12 @@ param location = 'uaenorth'
 // that name for its retention window; nothing can shorten that. Naming the
 // vault here means prod's vault is created once with the settings it should
 // have had, and is not hostage to the first attempt's mistake.
-param keyVaultName = 'kv-quotes-prod'
+// RENAMED FOR THE SUBSCRIPTION MOVE. Key Vault names are GLOBAL, not
+// per-subscription, and the old subscription's kv-quotes-prod still holds the
+// original name. Waiting for that one to be deleted would make prod's creation
+// depend on the teardown that is meant to happen LAST, so prod takes a new name
+// instead -- the same reasoning as the capstone registry and SQL server.
+param keyVaultName = 'kv-quotes-prod-v2'
 
 param keyVaultPurgeProtection = false
 param keyVaultSoftDeleteRetentionInDays = 7
@@ -211,42 +216,46 @@ param keyVaultSoftDeleteRetentionInDays = 7
 // A hand-run `az role assignment create` fixes that once and then disappears
 // with the vault on the next failed deployment. Granting it here means the
 // vault arrives usable. Scoped to this vault alone, for this one principal.
-param keyVaultWriterPrincipalId = 'a59d00a8-a829-49b4-83d1-952727eea166'
+//
+// SENTINEL after the tenant move: this is an object id, and an object id from
+// the old directory names nobody here. migration/01-set-identities.ps1 fills it.
+param keyVaultWriterPrincipalId = '6294a008-f2fa-4b34-b06d-f897e5844511'
 
-// --- Entra ID (Day 25) ----------------------------------------------------
-// THESE THREE ARE MISSING ON PURPOSE, AND THIS FILE DOES NOT COMPILE WITHOUT
-// THEM. That is the point.
+// --- Entra ID ------------------------------------------------------------
+// PROD GETS ITS OWN REGISTRATION, IN THE NEW TENANT, AND IT IS NOT DEV'S.
+// Sharing one registration across dev and prod is the tempting shortcut and it
+// is the wrong one: one consent screen, one set of redirect URIs, and tokens
+// that both environments accept — so a token minted for the dev SPA would be
+// valid against production. Two registrations cost nothing; neither has a
+// client secret.
 //
-//   param azureAdTenantId = '<tenant that owns this subscription>'
-//   param azureAdClientId = '<appId of the PROD API registration>'
-//   param azureAdAudience = 'api://<appId>'
-//
-// main.bicep used to default them to a tenant, a client id and an audience
-// copied from appsettings.json. This file overrode none of the three, so a
-// prod deployment would have succeeded and authenticated nothing: the wrong
-// tenant, a registration that does not live in it, and an audience that is
-// really a scope. Nothing would have errored, because no genuine Entra token
-// has been sent yet — Day 25 found the same audience bug in dev and called
-// that failure mode out precisely because it is invisible.
-//
-// The defaults are gone, so `az bicep build-params` now stops here and names
-// what is absent. Fill it by running, NOT by copying dev's values:
-//
+// The old prod registration lived in a directory this subscription no longer
+// trusts, so it is a sentinel rather than a value. Fill it by running:
 //   ./Day25/scripts/02-entra-app-registrations.ps1 -Environment prod
+// NOT by copying dev's values.
 //
-// It creates a separate prod registration and writes the three lines into this
-// file. Prod must not share dev's registration: one consent screen, one set of
-// redirect URIs and one app whose tokens are accepted by both environments is
-// how a dev token ends up valid in production.
+// A stale client id is invisible: the deployment succeeds and authenticates
+// nothing, because no genuine Entra token has been sent yet. That is precisely
+// the failure mode Day 25 found in dev.
 
-param azureAdTenantId = '8d46a076-d093-416d-a57b-8692cde13bf8'
-param azureAdClientId = '5cb4e24e-86b4-4287-9f6d-4da55bcae1ac'
 
 // api://<appId>, the Application ID URI -- NOT the scope. Entra puts the
 // resource's app ID URI in the token's aud claim and carries the scope
 // separately in scp, so the previous value ('api://quotes-api/access') would
 // have failed audience validation on every genuine token.
-param azureAdAudience = 'api://5cb4e24e-86b4-4287-9f6d-4da55bcae1ac'
+
+// api://<appId>, the Application ID URI -- NOT the scope. Entra puts the
+// resource's app ID URI in the token's aud claim and carries the scope
+// separately in scp, so the previous value ('api://quotes-api/access') would
+// have failed audience validation on every genuine token.
+param azureAdTenantId = '803dced7-0a24-4857-8be8-280047561e95'
+param azureAdClientId = '36d8fe13-61a4-45b7-81ba-2af903599b4b'
+
+// api://<appId>, the Application ID URI -- NOT the scope. Entra puts the
+// resource's app ID URI in the token's aud claim and carries the scope
+// separately in scp, so the previous value ('api://quotes-api/access') would
+// have failed audience validation on every genuine token.
+param azureAdAudience = 'api://36d8fe13-61a4-45b7-81ba-2af903599b4b'
 
 // --- Alerting (Day 26) ----------------------------------------------------
 // Stricter than dev, and for a reason rather than for tidiness: production
@@ -286,7 +295,7 @@ param logDailyQuotaGb = -1
 // environment affects both. On a subscription that allowed two environments
 // this parameter would be true.
 param createContainerAppsEnvironment = false
-param containerAppsEnvironmentName = 'cae-7mo4cimyk4vnk'
+param containerAppsEnvironmentName = 'cae-flpj3o7i5sjfy'
 param containerAppsEnvironmentResourceGroup = 'thinkschool-dev-rg'
 
 // --- API ------------------------------------------------------------------
@@ -403,33 +412,25 @@ param sqlAllowedClientIpAddresses = empty(readEnvironmentVariable('SQL_CLIENT_IP
 // administrator is one named individual loses its administrator when that
 // person changes role.
 //
-// REPLACE BEFORE DEPLOYING. Day 23 shipped 00000000-0000-0000-0000-000000000000
-// here, which is fine for a what-if and rejected by a real deployment. Create
-// the group in the Amity tenant first:
+// SENTINEL, AND IT MUST STAY ONE UNTIL THE GROUP EXISTS IN THE NEW TENANT.
+// The group this used to name lives in the old directory; its object id means
+// nothing here. Create the replacement in the new tenant first:
 //
 //   az ad group create --display-name quotes-sql-admins --mail-nickname quotes-sql-admins
 //   az ad group member add --group quotes-sql-admins --member-id (az ad signed-in-user show --query id -o tsv)
 //   az ad group show --group quotes-sql-admins --query id -o tsv
 //
-// If group creation is blocked in that tenant — university tenants often
-// restrict it — fall back to the G5 user with principalType 'User' and record
-// that as a stated deviation. Do not ship zeros.
-// A real group, created in the Amity tenant on 2026-09-08 and resolvable —
-// unlike Day 23's 00000000-0000-0000-0000-000000000000, which is fine for a
-// what-if and rejected by a deployment.
+// migration/01-set-identities.ps1 does all three and writes the id here.
 //
-// This was not a given. 00-preflight.ps1 could not read the tenant's
-// authorization policy (Graph returned nothing for defaultUserRolePermissions),
-// so whether directory writes were permitted was genuinely unknown until
-// `az ad app create` was tried and succeeded. Had it been refused, the fallback
-// was the dev user with principalType 'User' — a real weakening of the
-// production design, and one that would have been recorded as a deviation
-// rather than quietly adopted.
+// If group creation is refused — some tenants restrict directory writes — fall
+// back to the operator with principalType 'User' and record that as a stated
+// deviation. It is a real weakening of the production design, not a detail.
+// Do not ship zeros, and do not ship the old tenant's id.
 //
 // Membership is the operational half and is not visible in this file:
 //   az ad group member list --group quotes-sql-admins --query "[].userPrincipalName" -o tsv
 // An empty group administers nothing.
-param sqlEntraAdminObjectId = 'aad084c3-ebcf-495f-9c13-01415848fab4'
+param sqlEntraAdminObjectId = '6cd7b6ec-b2e9-4968-b765-d324cbb8cdbe'
 param sqlEntraAdminLogin = 'quotes-sql-admins'
 param sqlEntraAdminPrincipalType = 'Group'
 

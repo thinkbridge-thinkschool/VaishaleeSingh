@@ -23,10 +23,13 @@
 
 [CmdletBinding()]
 param(
-    [string] $SubscriptionId = '85567e22-432e-4648-aa68-ba2714167694',
-    [string] $ExpectedTenantId = '8d46a076-d093-416d-a57b-8692cde13bf8',
-    [string] $OldTenantId = 'f774bb68-0575-4cd2-9d4c-3b4e593d1110',
-    [string] $ApiAppRegistrationId = '91566dbd-d857-488a-858d-475e60b309b7',
+    [string] $SubscriptionId = '33c82ead-36a8-4d8f-b969-d8476690c224',
+    [string] $ExpectedTenantId = '803dced7-0a24-4857-8be8-280047561e95',
+    # The API app registration now lives in the SAME tenant as the subscription.
+    # Before the 2026-09 migration it lived in a separate directory and this
+    # script carried an OldTenantId for that reason; there is no second tenant
+    # to reach any more, so that parameter is gone rather than left inert.
+    [string] $ApiAppDisplayName = 'QuotesApi (dev)',
 
     # The region to probe. Not defaulted to centralindia deliberately -- see G1.
     [Parameter(Mandatory)]
@@ -81,20 +84,26 @@ if ($account.state -ne 'Enabled') {
 }
 
 # ---------------------------------------------------------------------------
-# G0b  The OLD tenant must still answer -- the API's Entra scheme depends on it
+# G0b  The API app registration exists IN THIS TENANT
 # ---------------------------------------------------------------------------
-Write-Gate 'G0b' 'Old tenant still reachable (the API app registration lives there)'
+Write-Gate 'G0b' 'API app registration resolvable in the signed-in tenant'
 
-Write-Host "  A directory is free and survives credit exhaustion, so the API's Entra"
-Write-Host "  scheme keeps pointing at $OldTenantId."
-Write-Host "  This check needs a separate sign-in and is NOT run automatically:"
-Write-Host ''
-Write-Host "    az login --tenant $OldTenantId --allow-no-subscriptions" -ForegroundColor Gray
-Write-Host "    az ad app show --id $ApiAppRegistrationId ``" -ForegroundColor Gray
-Write-Host '      --query "{uris:identifierUris, scopes:api.oauth2PermissionScopes[].value}"' -ForegroundColor Gray
-Write-Host ''
-Write-Warn 'Run the two commands above. They also settle the azureAdAudience disagreement.'
-Write-Warn 'Do NOT delete that tenant when decommissioning the old subscription.'
+# This gate used to check that a SEPARATE directory was still reachable, because
+# the registration lived in the old subscription's tenant and a directory
+# outlives the credit that funded it. The 2026-09 migration ended that split:
+# the registration is created in the tenant that owns this subscription, by
+# Day25/scripts/02-entra-app-registrations.ps1. So the question is no longer
+# "is the other tenant up" but "has the registration been created here yet".
+$app = az ad app list --display-name $ApiAppDisplayName --query "[0].{appId:appId,uris:identifierUris}" -o json 2>$null | ConvertFrom-Json
+if ($null -eq $app) {
+    Write-Warn "No app registration named '$ApiAppDisplayName' in this tenant."
+    Write-Warn 'Run it before deploying, or the parameter file keeps its unfilled sentinel:'
+    Write-Host '    ./Day25/scripts/02-entra-app-registrations.ps1 -Environment dev' -ForegroundColor Gray
+} else {
+    Write-Host "  appId $($app.appId)"
+    Write-Host "  uris  $($app.uris -join ', ')"
+    Write-Pass 'Registration found in this tenant.'
+}
 
 # ---------------------------------------------------------------------------
 # G1  Region policy -- is this region actually allowed?

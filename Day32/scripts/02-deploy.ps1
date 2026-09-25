@@ -32,24 +32,24 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $SubscriptionId  = '85567e22-432e-4648-aa68-ba2714167694',
+    [string] $SubscriptionId  = '33c82ead-36a8-4d8f-b969-d8476690c224',
     [string] $ResourceGroup   = 'thinkschool-dev-rg',
 
     [string] $AppName         = 'ca-quotes-capstone',
     [string] $EnvironmentName = 'cae-quotes-capstone',
-    [string] $RegistryName    = 'acrquotescapstone',
+    [string] $RegistryName    = 'acrquotescapstonev2',
     [string] $ImageTag        = 'v1',
 
-    [string] $SqlServerName    = 'sql-quotes-capstone',
+    [string] $SqlServerName    = 'sql-quotes-capstone-v2',
     [string] $SqlDatabaseName  = 'QuotesPlatform',
     [string] $SqlAdminUser     = 'capstoneadmin',
     [string] $SqlAdminPassword = $env:CAPSTONE_SQL_ADMIN_PASSWORD,
 
-    [string] $ServiceBusNamespace = 'sb-quotes-7mo4cimyk4vnk',
+    [string] $ServiceBusNamespace = 'sb-quotes-flpj3o7i5sjfy',
 
     # From 01-provision-identity.ps1's output. Defaults are this tenant's.
-    [string] $Authority = 'https://login.microsoftonline.com/8d46a076-d093-416d-a57b-8692cde13bf8/v2.0',
-    [string] $Audience  = 'api://e020d22f-8d9c-4e65-9240-9e3b0931270a',
+    [string] $Authority = 'https://login.microsoftonline.com/803dced7-0a24-4857-8be8-280047561e95/v2.0',
+    [string] $Audience  = 'api://SETME02-capstone-api-app-id',
 
     [switch] $SkipMigrations,
     [switch] $DryRun

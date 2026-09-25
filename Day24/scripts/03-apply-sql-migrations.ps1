@@ -43,7 +43,7 @@
          from the script, so the output is evidence and not an assumption.
 
 .PARAMETER SqlServerFqdn
-    e.g. sql-quotes-7mo4cimyk4vnk.database.windows.net
+    e.g. sql-quotes-flpj3o7i5sjfy.database.windows.net
 
 .PARAMETER DatabaseName
     Defaults to 'quotes'.
@@ -54,10 +54,10 @@
 
 .EXAMPLE
     ./Day24/scripts/03-apply-sql-migrations.ps1 `
-        -SqlServerFqdn sql-quotes-7mo4cimyk4vnk.database.windows.net -ScriptOnly
+        -SqlServerFqdn sql-quotes-flpj3o7i5sjfy.database.windows.net -ScriptOnly
 
     ./Day24/scripts/03-apply-sql-migrations.ps1 `
-        -SqlServerFqdn sql-quotes-7mo4cimyk4vnk.database.windows.net
+        -SqlServerFqdn sql-quotes-flpj3o7i5sjfy.database.windows.net
 #>
 
 [CmdletBinding()]

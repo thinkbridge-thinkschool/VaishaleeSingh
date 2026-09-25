@@ -50,8 +50,8 @@
 
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [string] $SubscriptionId  = '85567e22-432e-4648-aa68-ba2714167694',
-    [string] $ExpectedTenant  = '8d46a076-d093-416d-a57b-8692cde13bf8',
+    [string] $SubscriptionId  = '33c82ead-36a8-4d8f-b969-d8476690c224',
+    [string] $ExpectedTenant  = '803dced7-0a24-4857-8be8-280047561e95',
     [string] $ResourceGroup   = 'thinkschool-dev-rg',
     [string] $Repo            = 'thinkbridge-thinkschool/VaishaleeSingh',
 
@@ -62,7 +62,7 @@ param(
     # only reliable source for it.
     [string] $RepoWithIds     = 'thinkbridge-thinkschool@285446293/VaishaleeSingh@1331675643',
     [string] $DisplayName     = 'github-actions-quotes (dev)',
-    [string] $Registry        = 'cr7mo4cimyk4vnk',
+    [string] $Registry        = 'crflpj3o7i5sjfy',
     [string[]] $ContainerApps = @('quotes-api-dev', 'quotes-web-dev'),
 
     # PROD, AND WHY THESE ARE EMPTY.

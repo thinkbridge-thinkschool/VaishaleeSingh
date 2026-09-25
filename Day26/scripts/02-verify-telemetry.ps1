@@ -43,10 +43,10 @@
 
 [CmdletBinding()]
 param(
-    [string] $SubscriptionId = '85567e22-432e-4648-aa68-ba2714167694',
+    [string] $SubscriptionId = '33c82ead-36a8-4d8f-b969-d8476690c224',
     [string] $ResourceGroup  = 'thinkschool-dev-rg',
-    [string] $WorkspaceName  = 'log7mo4cimyk4vnk',
-    [string] $ApiBaseUrl     = 'https://quotes-api-dev.greenhill-88fb93d9.uaenorth.azurecontainerapps.io',
+    [string] $WorkspaceName  = 'logflpj3o7i5sjfy',
+    [string] $ApiBaseUrl     = 'https://quotes-api-dev.proudbeach-00851671.uaenorth.azurecontainerapps.io',
     [int]    $WaitSeconds    = 300,
 
     # HOW MANY WRITES, AND WHY IT IS NOT ONE.

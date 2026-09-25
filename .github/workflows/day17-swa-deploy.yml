@@ -6,17 +6,25 @@ name: day17-swa-deploy
 #
 # Day 17 built Day13/quotes-web and uploaded it to Azure Static Web Apps, which
 # reverse-proxied /api/* to the Container App over a linked backend. Day 24 moved
-# the whole deployment to a new subscription (the old one is out of credit), and
-# that subscription's "Allowed resource deployment regions" policy permits five
-# regions -- indonesiacentral, malaysiawest, indiasouthcentral, uaenorth,
-# koreacentral -- while Microsoft.Web/staticSites is offered in only a handful of
-# regions worldwide, none of them on that list. A Static Web App cannot be
-# created here at all.
+# the deployment to a subscription whose "Allowed resource deployment regions"
+# policy permitted none of the regions Microsoft.Web/staticSites is offered in,
+# so a Static Web App could not be created there at all.
 #
-# So the SPA is now built into the API image and served by the Container App;
-# see the "Angular front end" block in Day7/piece2/QuotesApi/Program.cs and the
-# front-end steps in day17-api-deploy.yml. Deploying the front end is that
-# workflow's job now, triggered by the Day13/quotes-web/** path.
+# THAT POLICY IS GONE. The subscription this repository has targeted since
+# 2026-09-25 carries no allowed-locations assignment, and staticSites is offered
+# in Central US, East US 2, West US 2, West Europe and East Asia. SWA was not
+# reinstated anyway: the front end is an nginx container app, defined in
+# Day7/piece2/infra/modules/web.bicep, which serves the SPA and proxies /api from
+# ONE origin -- so the browser never makes a cross-origin request and there is no
+# CORS configuration to keep in step with two environments. The comment that used
+# to stand here claimed an impossibility; what is left is a decision, argued
+# where the resource is defined.
+#
+# The front end is deployed by day24-web-deploy.yml, on pushes to dev. This file
+# deploys nothing and has not since Day 24 -- it is the front-end GATE for pull
+# requests and pushes to main. Disabling it would quietly remove the only lint,
+# unit-test, bundle-budget and build check the front end has on that branch,
+# which is the opposite of what its stale name suggests.
 #
 # WHAT IS LOST, stated rather than glossed: the Static Web App was also the
 # authentication boundary. The Container App had Container Apps authentication
